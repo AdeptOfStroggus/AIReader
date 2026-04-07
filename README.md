@@ -16,8 +16,8 @@ AIReader is a Python application that combines PDF file reading with artificial 
 
 ## Requirements
 
-- Python 3.7 or higher
-- GPU support (recommended for optimal performance during page conversion)
+- Python 3.14 or higher
+- GPU support (optional, recommended for optimal performance during page conversion)
 
 ## Installation
 
