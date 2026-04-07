@@ -27,6 +27,7 @@ class MainApp(QMainWindow):
         self.box.addWidget(self.AIPanel)
         self.box.setStretch(0,5)
         self.box.setStretch(1,1)
+        
 
         self.mainWidget = QWidget()
         self.mainWidget.setLayout(self.box)

@@ -3,6 +3,7 @@ from openai import AsyncOpenAI
 from pydantic import BaseModel
 import json
 
+
 class AIClient():
     def __init__(self):
 
@@ -18,23 +19,30 @@ class AIClient():
 
 
     async def CreateResponceAsync(self, modelID, query, text):
-        response = await self.async_client.responses.create(
+        try:
+            response = await self.async_client.responses.create(
             model=modelID,
-            instructions=("""
-            Ты - надёжный помощник в анализе различной литературы. Твоя задача - максимально подробно и точно изучить текст и выполнить задачу, которую дал пользователь. Ответ выдавай в HTML, и только ответ на задачу (не более). 
+            instructions=(f"""
+            Ты - надёжный помощник в анализе различной литературы. Твоя задача - максимально подробно и точно изучить текст и выполнить задачу, которую дал пользователь.
+                           Ответ выдавай в HTML, и только ответ на задачу (не более). Не надо говорить "этот HTML код выполняет то-то то-то" и такое прочее. 
 
-            Текст:
-            """ + text),
+            Текст предоставлен ниже:
+            """+text),
             input=query,
-        )
-        return response.output_text
+            )
+            return response.output_text
+        except Exception as e:
+            return str(e)
 
     async def GetModelsAsync(self):
-        """Выполняет асинхронный запрос к API для получения списка моделей."""
-        resp_models = await self.async_client.models.list()
-        model_ids = [model.id for model in resp_models.data]
-        self.modelListID = model_ids
-        return model_ids
+        try:
+            """Выполняет асинхронный запрос к API для получения списка моделей."""
+            resp_models = await self.async_client.models.list()
+            model_ids = [model.id for model in resp_models.data]
+            self.modelListID = model_ids
+            return model_ids
+        except Exception as e:
+            return str(e)
     
     def SetCurrentModelID(self, id):
         self.currentModelId = id

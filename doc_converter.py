@@ -8,8 +8,7 @@ from PySide6.QtPdf import QPdfDocument
 
 from docling.datamodel.base_models import InputFormat
 from docling.document_converter import DocumentConverter, PdfFormatOption
-from docling.datamodel.pipeline_options import PdfPipelineOptions, TableFormerMode
-
+from docling.datamodel.pipeline_options import PdfPipelineOptions, TableFormerMode, RapidOcrOptions, EasyOcrOptions
 
 
 class Converter:
@@ -19,13 +18,16 @@ class Converter:
             device=AcceleratorDevice.AUTO,  # or AcceleratorDevice.AUTO
         )
 
+
         # Customize PDF pipeline
         pipeline_options = PdfPipelineOptions()
         pipeline_options.do_ocr = True
+        pipeline_options.ocr_options = EasyOcrOptions(lang=['ru', 'en'], force_full_page_ocr=True, recog_network="craft")
         pipeline_options.do_table_structure = True
         #pipeline_options.table_structure_options.mode = TableFormerMode.ACCURATE
         pipeline_options.accelerator_options = accelerator_options
         pipeline_options.do_formula_enrichment = True
+
 
         # Apply options to converter
         self.converter = DocumentConverter(
