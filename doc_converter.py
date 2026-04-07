@@ -22,7 +22,7 @@ class Converter:
         # Customize PDF pipeline
         pipeline_options = PdfPipelineOptions()
         pipeline_options.do_ocr = True
-        pipeline_options.ocr_options = EasyOcrOptions(lang=['ru', 'en'], force_full_page_ocr=True, recog_network="craft")
+        pipeline_options.ocr_options = EasyOcrOptions(lang=['ru', 'en'], force_full_page_ocr=True)
         pipeline_options.do_table_structure = True
         #pipeline_options.table_structure_options.mode = TableFormerMode.ACCURATE
         pipeline_options.accelerator_options = accelerator_options

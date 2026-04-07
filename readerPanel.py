@@ -34,7 +34,7 @@ class ReaderPanel(QWidget):
         self.nextPage.setShortcut(Qt.Key.Key_Right)
 
         self.jumpPage = QTextEdit()
-        self.jumpPage.selectionChanged.connect(self.JumpTOPage)
+        self.jumpPage.textChanged.connect(self.JumpTOPage)
         self.jumpPage.setFixedHeight(20)
 
 
@@ -81,6 +81,11 @@ class ReaderPanel(QWidget):
 
         
     def GetConvertedText(self):
+        text = self.convertedPagesCache[self.currentPage]
+        if(text == ""):
+            self.ConvertPage(pageIndex=self.currentPage)
+        text = self.convertedPagesCache[self.currentPage]
+        self.convertedTextView.setHtml(text)
         return self.convertedTextView.toHtml()
 
     def SwitchModes(self):
@@ -104,7 +109,7 @@ class ReaderPanel(QWidget):
         self.convertedPagesCache.clear()
         self.convertedPagesCache = [str() for x in range(self.maxPages)]
         print(self.convertedPagesCache)
-        self.LoadConvertedPage(0)
+        #self.LoadConvertedPage(0)
         self.SetPdfPage(0)
 
         self.currentPage=0
@@ -117,8 +122,8 @@ class ReaderPanel(QWidget):
     def LoadConvertedPage(self, pageIndex):
         if(pageIndex < 0 and pageIndex > self.maxPages): pass
         else:
-            if(self.convertedPagesCache[pageIndex] == ""):
-                self.ConvertPage(pageIndex=pageIndex)
+            #if(self.convertedPagesCache[pageIndex] == ""):
+               # self.ConvertPage(pageIndex=pageIndex)
             self.convertedTextView.setHtml(self.convertedPagesCache[pageIndex])
 
     def SetPdfPage(self, pageIndex):
