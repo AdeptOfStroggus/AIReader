@@ -7,6 +7,14 @@ __pycache__/
 # C extensions
 *.so
 
+#Project
+*.bin
+test_*
+*.ipynb
+*.txt
+*.sqlite3
+*.pickle
+
 # Distribution / packaging
 .Python
 build/
