@@ -146,12 +146,16 @@ class AIAssistantPanel(QWidget):
         self.responceEdit.setHtml(resp)
 
     def OnModelReceived(self, modelList):
-        self.UpdateModelList(modelList)
+        if isinstance(modelList, list):
+            self.UpdateModelList(modelList)
+        else:
+            # Если пришла строка (ошибка), выводим её в список
+            self.UpdateModelList([f"Ошибка: {str(modelList)}"])
 
     def UpdateModelList(self, modelIDs):
         self.modelListUI.clear()
         for i in modelIDs:
-            item = QListWidgetItem(i)
+            item = QListWidgetItem(str(i))
             self.modelListUI.addItem(item)
 
     def GetSelectedModel(self):
