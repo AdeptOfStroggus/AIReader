@@ -1,8 +1,8 @@
-from PySide6.QtWidgets import QApplication, QWidget, QVBoxLayout, QHBoxLayout, QMainWindow
+from PySide6.QtWidgets import QApplication, QWidget, QVBoxLayout, QHBoxLayout, QMainWindow, QSplitter
 from ai_client import AIClient
 import sys
 from aiAssistant_ui import AIAssistantPanel
-from PySide6.QtCore import QRunnable, QThreadPool, QTimer, Slot
+from PySide6.QtCore import QRunnable, QThreadPool, QTimer, Slot, Qt
 # ...
 from readerPanel import ReaderPanel
 from PySide6.QtGui import QAction
@@ -21,12 +21,34 @@ class MainApp(QMainWindow):
         self.readerPanel = ReaderPanel(self.docConverter)
         self.AIPanel = AIAssistantPanel(client, self.readerPanel.GetConvertedText)
 
+        # Создаем сплиттер для разделения книги и чата
+        self.splitter = QSplitter(Qt.Horizontal)
+        self.splitter.addWidget(self.readerPanel)
+        self.splitter.addWidget(self.AIPanel)
+        
+        # Устанавливаем минимальные размеры для панелей (разумные пределы)
+        self.readerPanel.setMinimumWidth(400)
+        self.AIPanel.setMinimumWidth(300)
+        
+        # Начальное распределение места (70% книге, 30% чату)
+        self.splitter.setStretchFactor(0, 7)
+        self.splitter.setStretchFactor(1, 3)
+        
+        # Стилизация ползунка сплиттера
+        self.splitter.setStyleSheet("""
+            QSplitter::handle {
+                background-color: #e0e0e0;
+                width: 2px;
+                margin: 10px 0;
+            }
+            QSplitter::handle:hover {
+                background-color: #0078d4;
+            }
+        """)
+
         self.box = QHBoxLayout()
-        #self.box.addWidget(self.TOCPanel)
-        self.box.addWidget(self.readerPanel)
-        self.box.addWidget(self.AIPanel)
-        self.box.setStretch(0,5)
-        self.box.setStretch(1,1)
+        self.box.addWidget(self.splitter)
+        self.box.setContentsMargins(0, 0, 0, 0)
         
 
         self.mainWidget = QWidget()
