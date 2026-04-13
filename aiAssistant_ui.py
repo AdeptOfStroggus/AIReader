@@ -8,13 +8,84 @@ from PySide6.QtWidgets import (
     QSplitter,
     QGroupBox,
     QLabel,
-    QScrollArea
+    QScrollArea,
+    QSpacerItem,
+    QSizePolicy
 )
 from PySide6.QtCore import Qt, Signal
-from PySide6.QtGui import QColor
+from PySide6.QtGui import QColor, QFont
 from ai_client import AIClient
 import asyncio
 from PySide6.QtCore import QRunnable, QThreadPool, QTimer, Slot, QThread, Signal, Qt
+
+class MessageBubble(QWidget):
+    """Виджет отдельного сообщения в стиле мессенджера."""
+    def __init__(self, sender, message, is_user, is_dark):
+        super().__init__()
+        main_layout = QVBoxLayout(self)
+        main_layout.setContentsMargins(0, 5, 0, 5)
+        main_layout.setSpacing(2)
+        
+        # Контейнер для выравнивания по горизонтали
+        bubble_container = QHBoxLayout()
+        bubble_container.setContentsMargins(0, 0, 0, 0)
+        
+        # Тело сообщения (бабл)
+        self.bubble = QLabel(message)
+        self.bubble.setWordWrap(True)
+        self.bubble.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        # Ограничиваем ширину бабла (примерно 80% от ширины панели)
+        self.bubble.setMaximumWidth(350) 
+        
+        # Заголовок (имя отправителя)
+        self.header = QLabel(sender)
+        self.header.setStyleSheet("color: #888888; font-size: 10px; font-weight: bold;")
+        
+        self.update_style(is_user, is_dark)
+        
+        if is_user:
+            bubble_container.addStretch(1)
+            bubble_container.addWidget(self.bubble)
+            main_layout.addWidget(self.header, 0, Qt.AlignmentFlag.AlignRight)
+            main_layout.addLayout(bubble_container)
+            self.header.setContentsMargins(0, 0, 10, 0)
+        else:
+            bubble_container.addWidget(self.bubble)
+            bubble_container.addStretch(1)
+            main_layout.addWidget(self.header, 0, Qt.AlignmentFlag.AlignLeft)
+            main_layout.addLayout(bubble_container)
+            self.header.setContentsMargins(10, 0, 0, 0)
+
+    def update_style(self, is_user, is_dark):
+        if is_user:
+            bg_color = "#007acc"
+            text_color = "white"
+            radius = "12px 12px 2px 12px"
+            border = "none"
+        else:
+            if is_dark:
+                bg_color = "#2d2d2d"
+                text_color = "#d4d4d4"
+                border = "1px solid #3c3c3c"
+            else:
+                bg_color = "#f1f1f1"
+                text_color = "#333333"
+                border = "1px solid #e0e0e0"
+            radius = "12px 12px 12px 2px"
+            
+        self.bubble.setStyleSheet(f"""
+            QLabel {{
+                background-color: {bg_color};
+                color: {text_color};
+                border-radius: 12px;
+                border: {border};
+                padding: 8px 12px;
+                font-size: 13px;
+            }}
+        """)
+        # Хак для имитации специфических углов в Qt QLabel (border-radius применяется ко всем углам)
+        # Для реальных специфических углов нужно рисовать через QPainter, 
+        # но для начала сделаем просто аккуратные закругления.
 
 class GetModelsWorker(QThread):
     """Worker thread."""
@@ -60,6 +131,7 @@ class AIAssistantPanel(QWidget):
         self.readText = readmethod
         self.promptWorker = None
         self.modelUpdateWorker = None
+        self.isDarkMode = True
 
         #Инициализация GUI
 
@@ -68,31 +140,31 @@ class AIAssistantPanel(QWidget):
         self.modelSelector.setPlaceholderText("Загрузка моделей...")
         self.modelSelector.setStyleSheet("""
             QComboBox {
-                border: 1px solid #dcdcdc;
-                border-radius: 8px;
-                padding: 5px 30px 5px 10px;
-                background-color: white;
-                min-height: 25px;
-                font-size: 13px;
-                color: #333;
+                border: 1px solid #3c3c3c;
+                border-radius: 4px;
+                padding: 4px 10px;
+                background-color: #3c3c3c;
+                color: #cccccc;
+                min-height: 24px;
+                font-size: 12px;
             }
             QComboBox::drop-down {
                 subcontrol-origin: padding;
                 subcontrol-position: top right;
                 width: 20px;
-                border-left: 1px solid #dcdcdc;
-                border-top-right-radius: 8px;
-                border-bottom-right-radius: 8px;
+                border-left: none;
             }
             QComboBox::down-arrow {
                 image: none;
                 border-left: 4px solid transparent;
                 border-right: 4px solid transparent;
-                border-top: 5px solid #666;
+                border-top: 5px solid #cccccc;
             }
             QComboBox QAbstractItemView {
-                border: 1px solid #dcdcdc;
-                selection-background-color: #f0f2f5;
+                background-color: #252526;
+                color: #cccccc;
+                border: 1px solid #454545;
+                selection-background-color: #094771;
                 outline: 0px;
             }
         """)
@@ -102,21 +174,17 @@ class AIAssistantPanel(QWidget):
         self.chatWindow = QScrollArea()
         self.chatWindow.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.chatWindow.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
-        self.chatHistory = QTextEdit()
-        self.chatHistory.setPlaceholderText("Здесь будет ваша переписка...")
-        self.chatHistory.setReadOnly(True)
-        self.chatHistory.setStyleSheet("""
-            QTextEdit {
-                background-color: #ffffff;
-                border: none;
-                padding: 10px;
-                font-size: 14px;
-                line-height: 1.5;
-            }
-        """)
-        self.chatWindow.setWidget(self.chatHistory)
         self.chatWindow.setWidgetResizable(True)
-        self.chatWindow.setStyleSheet("border: 1px solid #e0e0e0; border-radius: 15px; background-color: white;")
+        
+        # Контейнер для сообщений
+        self.chatHistoryWidget = QWidget()
+        self.chatHistoryLayout = QVBoxLayout(self.chatHistoryWidget)
+        self.chatHistoryLayout.setAlignment(Qt.AlignmentFlag.AlignTop)
+        self.chatHistoryLayout.setContentsMargins(10, 10, 10, 10)
+        self.chatHistoryLayout.setSpacing(10)
+        
+        self.chatWindow.setWidget(self.chatHistoryWidget)
+        self.chatWindow.setStyleSheet("border: 1px solid #3c3c3c; border-radius: 4px; background-color: #1e1e1e;")
 
         #Нижняя панель ввода
         self.inputContainer = QWidget()
@@ -127,44 +195,44 @@ class AIAssistantPanel(QWidget):
         #Окно промпта
         self.promptWindow = QTextEdit()
         self.promptWindow.setPlaceholderText("Спросите что-нибудь...")
-        self.promptWindow.setFixedHeight(45)
+        self.promptWindow.setFixedHeight(40)
         self.promptWindow.setStyleSheet("""
             QTextEdit {
-                border: 1px solid #e0e0e0;
-                border-radius: 22px;
-                padding-left: 15px;
-                padding-right: 45px;
-                padding-top: 10px;
-                background-color: #f8f9fa;
-                font-size: 14px;
-                color: #333;
+                border: 1px solid #3c3c3c;
+                border-radius: 4px;
+                padding: 8px 40px 8px 10px;
+                background-color: #3c3c3c;
+                color: #cccccc;
+                font-size: 13px;
+            }
+            QTextEdit:focus {
+                border: 1px solid #007acc;
             }
         """)
 
         #Кнопка на отправку промпта
         self.promptEnterButton = QPushButton(self.promptWindow)
         self.promptEnterButton.clicked.connect(self.OnPromptEnderButtonClicked)
-        self.promptEnterButton.setText("↑") # Элегантная стрелка вверх
-        self.promptEnterButton.setFixedSize(32, 32)
-        # Позиционируем кнопку прямо внутри текстового поля справа
-        self.promptEnterButton.move(0, 0) # Будет уточнено в resizeEvent или через отступы
+        self.promptEnterButton.setText("↑")
+        self.promptEnterButton.setFixedSize(28, 28)
         self.promptEnterButton.setStyleSheet("""
             QPushButton {
-                background-color: #000000;
+                background-color: #007acc;
                 color: white;
-                border-radius: 16px;
-                font-size: 18px;
+                border-radius: 4px;
+                font-size: 16px;
                 font-weight: bold;
                 border: none;
             }
             QPushButton:hover {
-                background-color: #222;
+                background-color: #0062a3;
             }
             QPushButton:pressed {
-                background-color: #444;
+                background-color: #005a92;
             }
             QPushButton:disabled {
-                background-color: #ccc;
+                background-color: #333333;
+                color: #666666;
             }
         """)
 
@@ -176,19 +244,19 @@ class AIAssistantPanel(QWidget):
         #Кнопка на обновление модели
         self.refreshModelButton = QPushButton()
         self.refreshModelButton.clicked.connect(self.OnRefreshModelButtonClicked)
-        self.refreshModelButton.setText("↻") # Иконка обновления
+        self.refreshModelButton.setText("↻")
         self.refreshModelButton.setFixedSize(30, 30)
         self.refreshModelButton.setStyleSheet("""
             QPushButton {
-                background-color: #f0f2f5;
-                color: #555;
-                border: 1px solid #dcdcdc;
-                border-radius: 15px;
-                font-size: 16px;
-                font-weight: bold;
+                background-color: #3c3c3c;
+                color: #cccccc;
+                border: 1px solid #3c3c3c;
+                border-radius: 4px;
+                font-size: 14px;
             }
             QPushButton:hover {
-                background-color: #e4e6e9;
+                background-color: #4d4d4d;
+                border: 1px solid #007acc;
             }
         """)
 
@@ -268,31 +336,16 @@ class AIAssistantPanel(QWidget):
         self.AppendToChat("ИИ", resp)
 
     def AppendToChat(self, sender, message):
-        if sender == "Вы":
-            # Сообщение пользователя: справа, синий пузырь
-            bubble_style = "background-color: #0078d4; color: white; border-radius: 20px; border-bottom-right-radius: 5px; padding: 12px 16px; margin-left: 40px; margin-bottom: 4px; display: inline-block;"
-            header_style = "color: #888; font-size: 11px; margin-bottom: 4px; font-weight: bold;"
-            alignment = "right"
-        else:
-            # Сообщение ИИ: слева, серый пузырь
-            bubble_style = "background-color: #f1f3f4; color: #202124; border-radius: 20px; border-top-left-radius: 5px; padding: 12px 16px; margin-right: 40px; margin-bottom: 4px; display: inline-block;"
-            header_style = "color: #888; font-size: 11px; margin-bottom: 4px; font-weight: bold;"
-            alignment = "left"
-
-        # Формируем HTML для "пузыря"
-        safe_message = message.replace('\n', '<br/>')
-        formatted_message = f"""
-        <div style='margin-bottom: 16px; text-align: {alignment};'>
-            <div style='{header_style}'>{sender}</div>
-            <div style='{bubble_style}'>
-                {safe_message}
-            </div>
-        </div>
-        """
+        is_user = (sender == "Вы")
         
-        self.chatHistory.append(formatted_message)
+        # Создаем виджет сообщения (бабл)
+        bubble = MessageBubble(sender, message, is_user, self.isDarkMode)
+        self.chatHistoryLayout.addWidget(bubble)
+        
         # Прокрутка вниз
-        self.chatHistory.verticalScrollBar().setValue(self.chatHistory.verticalScrollBar().maximum())
+        QTimer.singleShot(50, lambda: self.chatWindow.verticalScrollBar().setValue(
+            self.chatWindow.verticalScrollBar().maximum()
+        ))
 
     def OnModelReceived(self, models_info):
         if isinstance(models_info, list):
@@ -314,12 +367,182 @@ class AIAssistantPanel(QWidget):
             
             # Если модель serverless, красим её в зеленый цвет и добавляем метку
             if is_serverless:
-                self.modelSelector.setItemData(index, QColor("green"), Qt.ItemDataRole.ForegroundRole)
+                self.modelSelector.setItemData(index, QColor("#4ec9b0"), Qt.ItemDataRole.ForegroundRole)
                 self.modelSelector.setItemText(index, f"{m_id} (Serverless)")
 
     def GetSelectedModel(self):
         # Возвращаем оригинальный ID из userData
         return self.modelSelector.currentData()
+    
+    def SetDarkMode(self, is_dark):
+        self.isDarkMode = is_dark
+        if is_dark:
+            self.modelSelector.setStyleSheet("""
+                QComboBox {
+                    border: 1px solid #3c3c3c;
+                    border-radius: 4px;
+                    padding: 4px 10px;
+                    background-color: #3c3c3c;
+                    color: #cccccc;
+                    min-height: 24px;
+                    font-size: 12px;
+                }
+                QComboBox::drop-down {
+                    subcontrol-origin: padding;
+                    subcontrol-position: top right;
+                    width: 20px;
+                    border-left: none;
+                }
+                QComboBox::down-arrow {
+                    image: none;
+                    border-left: 4px solid transparent;
+                    border-right: 4px solid transparent;
+                    border-top: 5px solid #cccccc;
+                }
+                QComboBox QAbstractItemView {
+                    background-color: #252526;
+                    color: #cccccc;
+                    border: 1px solid #454545;
+                    selection-background-color: #094771;
+                    outline: 0px;
+                }
+            """)
+            self.chatWindow.setStyleSheet("border: 1px solid #3c3c3c; border-radius: 4px; background-color: #1e1e1e;")
+            self.chatHistoryWidget.setStyleSheet("background-color: #1e1e1e;")
+            self.promptWindow.setStyleSheet("""
+                QTextEdit {
+                    border: 1px solid #3c3c3c;
+                    border-radius: 4px;
+                    padding: 8px 40px 8px 10px;
+                    background-color: #3c3c3c;
+                    color: #cccccc;
+                    font-size: 13px;
+                }
+                QTextEdit:focus {
+                    border: 1px solid #007acc;
+                }
+            """)
+            self.promptEnterButton.setStyleSheet("""
+                QPushButton {
+                    background-color: #007acc;
+                    color: white;
+                    border-radius: 4px;
+                    font-size: 16px;
+                    font-weight: bold;
+                    border: none;
+                }
+                QPushButton:hover {
+                    background-color: #0062a3;
+                }
+                QPushButton:pressed {
+                    background-color: #005a92;
+                }
+                QPushButton:disabled {
+                    background-color: #333333;
+                    color: #666666;
+                }
+            """)
+            self.refreshModelButton.setStyleSheet("""
+                QPushButton {
+                    background-color: #3c3c3c;
+                    color: #cccccc;
+                    border: 1px solid #3c3c3c;
+                    border-radius: 4px;
+                    font-size: 14px;
+                }
+                QPushButton:hover {
+                    background-color: #4d4d4d;
+                    border: 1px solid #007acc;
+                }
+            """)
+        else:
+            self.modelSelector.setStyleSheet("""
+                QComboBox {
+                    border: 1px solid #cccccc;
+                    border-radius: 4px;
+                    padding: 4px 10px;
+                    background-color: #ffffff;
+                    color: #333333;
+                    min-height: 24px;
+                    font-size: 12px;
+                }
+                QComboBox::drop-down {
+                    subcontrol-origin: padding;
+                    subcontrol-position: top right;
+                    width: 20px;
+                    border-left: none;
+                }
+                QComboBox::down-arrow {
+                    image: none;
+                    border-left: 4px solid transparent;
+                    border-right: 4px solid transparent;
+                    border-top: 5px solid #666666;
+                }
+                QComboBox QAbstractItemView {
+                    background-color: #ffffff;
+                    color: #333333;
+                    border: 1px solid #cccccc;
+                    selection-background-color: #0078d4;
+                    selection-color: #ffffff;
+                    outline: 0px;
+                }
+            """)
+            self.chatWindow.setStyleSheet("border: 1px solid #dddddd; border-radius: 4px; background-color: #ffffff;")
+            self.chatHistoryWidget.setStyleSheet("background-color: #ffffff;")
+            self.promptWindow.setStyleSheet("""
+                QTextEdit {
+                    border: 1px solid #cccccc;
+                    border-radius: 4px;
+                    padding: 8px 40px 8px 10px;
+                    background-color: #f5f5f5;
+                    color: #333333;
+                    font-size: 13px;
+                }
+                QTextEdit:focus {
+                    border: 1px solid #0078d4;
+                }
+            """)
+            self.promptEnterButton.setStyleSheet("""
+                QPushButton {
+                    background-color: #0078d4;
+                    color: white;
+                    border-radius: 4px;
+                    font-size: 16px;
+                    font-weight: bold;
+                    border: none;
+                }
+                QPushButton:hover {
+                    background-color: #0062a3;
+                }
+                QPushButton:pressed {
+                    background-color: #005a92;
+                }
+                QPushButton:disabled {
+                    background-color: #eeeeee;
+                    color: #999999;
+                }
+            """)
+            self.refreshModelButton.setStyleSheet("""
+                QPushButton {
+                    background-color: #ffffff;
+                    color: #333333;
+                    border: 1px solid #cccccc;
+                    border-radius: 4px;
+                    font-size: 14px;
+                }
+                QPushButton:hover {
+                    background-color: #f5f5f5;
+                    border: 1px solid #0078d4;
+                }
+            """)
+        
+        # Обновляем стиль существующих баблов
+        for i in range(self.chatHistoryLayout.count()):
+            item = self.chatHistoryLayout.itemAt(i)
+            widget = item.widget()
+            if isinstance(widget, MessageBubble):
+                is_user = widget.header.text() == "Вы"
+                widget.update_style(is_user, is_dark)
     
     
 

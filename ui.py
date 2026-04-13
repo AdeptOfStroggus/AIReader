@@ -16,10 +16,13 @@ class MainApp(QMainWindow):
         self.client = client
         self.setWindowTitle("ИИ читалка книг")
         self.docConverter = Converter()
+        self.isDarkMode = True
 
-       # self.TOCPanel = AIAssistantPanel(client)
         self.readerPanel = ReaderPanel(self.docConverter)
         self.AIPanel = AIAssistantPanel(client, self.readerPanel.GetConvertedText)
+
+        # Применяем тему
+        self.ApplyTheme()
 
         # Создаем сплиттер для разделения книги и чата
         self.splitter = QSplitter(Qt.Horizontal)
@@ -33,18 +36,6 @@ class MainApp(QMainWindow):
         # Начальное распределение места (70% книге, 30% чату)
         self.splitter.setStretchFactor(0, 7)
         self.splitter.setStretchFactor(1, 3)
-        
-        # Стилизация ползунка сплиттера
-        self.splitter.setStyleSheet("""
-            QSplitter::handle {
-                background-color: #e0e0e0;
-                width: 2px;
-                margin: 10px 0;
-            }
-            QSplitter::handle:hover {
-                background-color: #0078d4;
-            }
-        """)
 
         self.box = QHBoxLayout()
         self.box.addWidget(self.splitter)
@@ -52,6 +43,7 @@ class MainApp(QMainWindow):
         
 
         self.mainWidget = QWidget()
+        self.mainWidget.setObjectName("mainWidget")
         self.mainWidget.setLayout(self.box)
         self.setCentralWidget(self.mainWidget)
 
@@ -68,8 +60,98 @@ class MainApp(QMainWindow):
 
         switchModesAction = QAction("&Показать конвертированный текст", self)
         switchModesAction.triggered.connect(self.SwitchModes)
-
         self.ViewMenu.addAction(switchModesAction)
+
+        self.themeAction = QAction("&Светлая тема", self)
+        self.themeAction.triggered.connect(self.ToggleTheme)
+        self.ViewMenu.addAction(self.themeAction)
+
+    def ApplyTheme(self):
+        if self.isDarkMode:
+            # VS Code Dark Theme
+            self.setStyleSheet("""
+                QMainWindow, QWidget#mainWidget {
+                    background-color: #1e1e1e;
+                    color: #d4d4d4;
+                }
+                QMenuBar {
+                    background-color: #323233;
+                    color: #cccccc;
+                    border-bottom: 1px solid #3c3c3c;
+                }
+                QMenuBar::item {
+                    background-color: transparent;
+                    padding: 5px 10px;
+                }
+                QMenuBar::item:selected {
+                    background-color: #4d4d4d;
+                    border-radius: 4px;
+                }
+                QMenu {
+                    background-color: #252526;
+                    color: #cccccc;
+                    border: 1px solid #454545;
+                }
+                QMenu::item:selected {
+                    background-color: #094771;
+                }
+                QSplitter::handle {
+                    background-color: #3c3c3c;
+                    width: 1px;
+                }
+                QSplitter::handle:hover {   
+                    background-color: #007acc;
+                }
+            """)
+            if hasattr(self, 'themeAction'):
+                self.themeAction.setText("&Светлая тема")
+        else:
+            # Modern Light Theme
+            self.setStyleSheet("""
+                QMainWindow, QWidget#mainWidget {
+                    background-color: #ffffff;
+                    color: #333333;
+                }
+                QMenuBar {
+                    background-color: #f3f3f3;
+                    color: #333333;
+                    border-bottom: 1px solid #dddddd;
+                }
+                QMenuBar::item {
+                    background-color: transparent;
+                    padding: 5px 10px;
+                }
+                QMenuBar::item:selected {
+                    background-color: #e5e5e5;
+                    border-radius: 4px;
+                }
+                QMenu {
+                    background-color: #ffffff;
+                    color: #333333;
+                    border: 1px solid #cccccc;
+                }
+                QMenu::item:selected {
+                    background-color: #0078d4;
+                    color: #ffffff;
+                }
+                QSplitter::handle {
+                    background-color: #eeeeee;
+                    width: 1px;
+                }
+                QSplitter::handle:hover {   
+                    background-color: #0078d4;
+                }
+            """)
+            if hasattr(self, 'themeAction'):
+                self.themeAction.setText("&Темная тема")
+        
+        # Обновляем дочерние панели
+        self.readerPanel.SetDarkMode(self.isDarkMode)
+        self.AIPanel.SetDarkMode(self.isDarkMode)
+
+    def ToggleTheme(self):
+        self.isDarkMode = not self.isDarkMode
+        self.ApplyTheme()
 
     def SwitchModes(self):
         self.readerPanel.SwitchModes()
@@ -77,6 +159,7 @@ class MainApp(QMainWindow):
     def LoadFile(self):
 
         
+        # Переводим заголовок диалога в русский
         filePath, _ = QFileDialog.getOpenFileName(
             self,
             "Импортировать файл",

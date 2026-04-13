@@ -15,37 +15,54 @@ class ReaderPanel(QWidget):
         #Окно с рендером PDF
         self.pdfWindow = QPdfView(self)
         self.pdfWindow.setPageMode(QPdfView.PageMode.SinglePage)
+        self.pdfWindow.setStyleSheet("background-color: #1e1e1e;")
 
         #Окно с рендером конвертированного текста
         self.convertedTextView = QTextEdit(self)
         self.convertedTextView.setReadOnly(True)
+        self.convertedTextView.setStyleSheet("""
+            QTextEdit {
+                background-color: #1e1e1e;
+                color: #d4d4d4;
+                border: none;
+                padding: 20px;
+                font-size: 14px;
+                line-height: 1.6;
+            }
+        """)
 
         #Layout навигации
         self.navigationOverlay = QWidget()
         self.navigationOverlay.setStyleSheet("""
             QWidget {
-                background-color: rgba(240, 240, 240, 180);
-                border-radius: 5px;
+                background-color: rgba(37, 37, 38, 220);
+                border: 1px solid #3c3c3c;
+                border-radius: 4px;
             }
         """)
         self.navigationOverlay.setFixedWidth(250)
-        self.navigationOverlay.setFixedHeight(50)
+        self.navigationOverlay.setFixedHeight(45)
 
         self.prevPage = QPushButton()
         self.prevPage.clicked.connect(self.OnPrevPageButtonClicked)
         self.prevPage.setText("←")
         self.prevPage.setShortcut(Qt.Key.Key_Left)
-        self.prevPage.setFixedSize(30, 30)
+        self.prevPage.setFixedSize(28, 28)
         self.prevPage.setStyleSheet("""
             QPushButton {
-                background-color: rgba(200, 200, 200, 150);
-                border-radius: 15px;
+                background-color: transparent;
+                color: #cccccc;
+                border-radius: 4px;
                 font-size: 16px;
                 font-weight: bold;
-                border: 1px solid gray;
+                border: none;
             }
             QPushButton:hover {
-                background-color: rgba(150, 150, 150, 200);
+                background-color: #3c3c3c;
+                color: #ffffff;
+            }
+            QPushButton:pressed {
+                background-color: #007acc;
             }
         """)
 
@@ -53,38 +70,47 @@ class ReaderPanel(QWidget):
         self.nextPage.clicked.connect(self.OnNextPageButtonClicked)
         self.nextPage.setText("→")
         self.nextPage.setShortcut(Qt.Key.Key_Right)
-        self.nextPage.setFixedSize(30, 30)
+        self.nextPage.setFixedSize(28, 28)
         self.nextPage.setStyleSheet("""
             QPushButton {
-                background-color: rgba(200, 200, 200, 150);
-                border-radius: 15px;
+                background-color: transparent;
+                color: #cccccc;
+                border-radius: 4px;
                 font-size: 16px;
                 font-weight: bold;
-                border: 1px solid gray;
+                border: none;
             }
             QPushButton:hover {
-                background-color: rgba(150, 150, 150, 200);
+                background-color: #3c3c3c;
+                color: #ffffff;
+            }
+            QPushButton:pressed {
+                background-color: #007acc;
             }
         """)
 
         self.jumpPage = QLineEdit()
         self.jumpPage.returnPressed.connect(self.JumpTOPage)
-        self.jumpPage.setFixedSize(40, 25)
+        self.jumpPage.setFixedSize(40, 24)
         self.jumpPage.setAlignment(Qt.AlignCenter)
         self.jumpPage.setPlaceholderText("...")
         self.jumpPage.setStyleSheet("""
             QLineEdit {
-                background-color: white; 
-                border-radius: 3px; 
-                border: 1px solid gray;
-                color: black;
+                background-color: #3c3c3c; 
+                border-radius: 2px; 
+                border: 1px solid #3c3c3c;
+                color: #cccccc;
+                font-size: 12px;
+            }
+            QLineEdit:focus {
+                border: 1px solid #007acc;
             }
         """)
 
 
         self.pagesLabel = QLabel()
         self.pagesLabel.setText("0 из 0")
-        self.pagesLabel.setStyleSheet("background: transparent; font-size: 12px;")
+        self.pagesLabel.setStyleSheet("background: transparent; color: #808080; font-size: 12px;")
 
         self.navigationLayout = QHBoxLayout(self.navigationOverlay)
         self.navigationLayout.setContentsMargins(5, 5, 5, 5)
@@ -133,15 +159,19 @@ class ReaderPanel(QWidget):
         self.currentPage = 0
         
         self.convertedPagesCache = []
+        self.isDarkMode = True
 
         
     def GetConvertedText(self):
+        if not self.convertedPagesCache or self.currentPage >= len(self.convertedPagesCache):
+            return "Текст не загружен"
+        
         text = self.convertedPagesCache[self.currentPage]
         if(text == ""):
             self.ConvertPage(pageIndex=self.currentPage)
         text = self.convertedPagesCache[self.currentPage]
         self.convertedTextView.setHtml(text)
-        return self.convertedTextView.toHtml()
+        return self.convertedTextView.toPlainText()
 
     def SwitchModes(self):
         if(self.originalMode == True):
@@ -201,6 +231,111 @@ class ReaderPanel(QWidget):
             self.LoadConvertedPage(self.currentPage)
             self.pdfWindow.pageNavigator().jump(self.currentPage,QPointF(0,0),1.0)
             self.setPagesCount(self.currentPage)
+
+    def SetDarkMode(self, is_dark):
+        self.isDarkMode = is_dark
+        if is_dark:
+            self.pdfWindow.setStyleSheet("background-color: #1e1e1e;")
+            self.convertedTextView.setStyleSheet("""
+                QTextEdit {
+                    background-color: #1e1e1e;
+                    color: #d4d4d4;
+                    border: none;
+                    padding: 20px;
+                    font-size: 14px;
+                    line-height: 1.6;
+                }
+            """)
+            self.navigationOverlay.setStyleSheet("""
+                QWidget {
+                    background-color: rgba(37, 37, 38, 220);
+                    border: 1px solid #3c3c3c;
+                    border-radius: 4px;
+                }
+            """)
+            button_style = """
+                QPushButton {
+                    background-color: transparent;
+                    color: #cccccc;
+                    border-radius: 4px;
+                    font-size: 16px;
+                    font-weight: bold;
+                    border: none;
+                }
+                QPushButton:hover {
+                    background-color: #3c3c3c;
+                    color: #ffffff;
+                }
+                QPushButton:pressed {
+                    background-color: #007acc;
+                }
+            """
+            self.prevPage.setStyleSheet(button_style)
+            self.nextPage.setStyleSheet(button_style)
+            self.jumpPage.setStyleSheet("""
+                QLineEdit {
+                    background-color: #3c3c3c; 
+                    border-radius: 2px; 
+                    border: 1px solid #3c3c3c;
+                    color: #cccccc;
+                    font-size: 12px;
+                }
+                QLineEdit:focus {
+                    border: 1px solid #007acc;
+                }
+            """)
+            self.pagesLabel.setStyleSheet("background: transparent; color: #808080; font-size: 12px;")
+        else:
+            self.pdfWindow.setStyleSheet("background-color: #ffffff;")
+            self.convertedTextView.setStyleSheet("""
+                QTextEdit {
+                    background-color: #ffffff;
+                    color: #333333;
+                    border: none;
+                    padding: 20px;
+                    font-size: 14px;
+                    line-height: 1.6;
+                }
+            """)
+            self.navigationOverlay.setStyleSheet("""
+                QWidget {
+                    background-color: rgba(255, 255, 255, 220);
+                    border: 1px solid #dddddd;
+                    border-radius: 4px;
+                }
+            """)
+            button_style = """
+                QPushButton {
+                    background-color: transparent;
+                    color: #333333;
+                    border-radius: 4px;
+                    font-size: 16px;
+                    font-weight: bold;
+                    border: none;
+                }
+                QPushButton:hover {
+                    background-color: #f0f0f0;
+                    color: #0078d4;
+                }
+                QPushButton:pressed {
+                    background-color: #e5e5e5;
+                }
+            """
+            self.prevPage.setStyleSheet(button_style)
+            self.nextPage.setStyleSheet(button_style)
+            self.jumpPage.setStyleSheet("""
+                QLineEdit {
+                    background-color: #ffffff; 
+                    border-radius: 2px; 
+                    border: 1px solid #cccccc;
+                    color: #333333;
+                    font-size: 12px;
+                }
+                QLineEdit:focus {
+                    border: 1px solid #0078d4;
+                }
+            """)
+            self.pagesLabel.setStyleSheet("background: transparent; color: #666666; font-size: 12px;")
 
     def setPagesCount(self, current_page: int = 1):
         self.pagesLabel.setText(f"{current_page+1} из {self.maxPages}")
