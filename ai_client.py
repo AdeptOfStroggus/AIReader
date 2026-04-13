@@ -1,11 +1,73 @@
 import asyncio
-from openai import AsyncOpenAI
-from pydantic import BaseModel
 import json
+import os
 
+# LangChain, FAISS и OpenAI импорты вынесены в ленивую загрузку
+
+class RAGManager:
+    """Управление векторным индексом FAISS для поиска по книге."""
+    def __init__(self):
+        # Используем легкую модель для эмбеддингов (инициализируется при первом использовании)
+        self._embeddings = None
+        self.vector_store = None
+        self._text_splitter = None
+
+    @property
+    def embeddings(self):
+        if self._embeddings is None:
+            from langchain_huggingface import HuggingFaceEmbeddings
+            self._embeddings = HuggingFaceEmbeddings(model_name="sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2")
+        return self._embeddings
+
+    @property
+    def text_splitter(self):
+        if self._text_splitter is None:
+            from langchain_text_splitters import RecursiveCharacterTextSplitter
+            self._text_splitter = RecursiveCharacterTextSplitter(
+                chunk_size=1000,
+                chunk_overlap=100,
+                length_function=len,
+            )
+        return self._text_splitter
+
+    def add_page_text(self, text, page_index):
+        """Разбивает текст страницы на чанки и добавляет в индекс."""
+        if not text or len(text.strip()) < 10:
+            return
+
+        from langchain_core.documents import Document
+        # Очищаем HTML теги для индексации (простой способ)
+        import re
+        clean_text = re.sub('<[^<]+?>', '', text)
+        
+        chunks = self.text_splitter.split_text(clean_text)
+        documents = [
+            Document(page_content=chunk, metadata={"page": page_index})
+            for chunk in chunks
+        ]
+        
+        if self.vector_store is None:
+            from langchain_community.vectorstores import FAISS
+            self.vector_store = FAISS.from_documents(documents, self.embeddings)
+        else:
+            self.vector_store.add_documents(documents)
+
+    def search(self, query, k=4):
+        """Поиск наиболее релевантных фрагментов."""
+        if self.vector_store is None:
+            return []
+        
+        docs = self.vector_store.similarity_search(query, k=k)
+        return docs
+
+    def clear(self):
+        """Очистка индекса при загрузке новой книги."""
+        self.vector_store = None
 
 class AIClient():
     def __init__(self):
+        from openai import AsyncOpenAI
+        self.rag_manager = RAGManager()
         try:
             with open(".env", 'r', encoding='utf-8') as openai_env:
                 self.rawData = openai_env.read()

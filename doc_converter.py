@@ -1,53 +1,55 @@
-from docling.document_converter import DocumentConverter
-from docling.datamodel.accelerator_options import AcceleratorDevice, AcceleratorOptions
-from pypdf import PdfReader, PdfWriter
-from io import BytesIO
-import tempfile
 import os
-from PySide6.QtPdf import QPdfDocument
-
-from docling.datamodel.base_models import InputFormat
-from docling.document_converter import DocumentConverter, PdfFormatOption
-from docling.datamodel.pipeline_options import PdfPipelineOptions, TableFormerMode, RapidOcrOptions, EasyOcrOptions
-
+import tempfile
+# Тяжелые импорты вынесены в ленивую загрузку
 
 class Converter:
     def __init__(self):
-        # Configure accelerator options for GPU
-        accelerator_options = AcceleratorOptions(
-            device=AcceleratorDevice.AUTO,  # or AcceleratorDevice.AUTO
-        )
+        self._converter = None
 
+    @property
+    def converter(self):
+        if self._converter is None:
+            from docling.document_converter import DocumentConverter, PdfFormatOption
+            from docling.datamodel.accelerator_options import AcceleratorDevice, AcceleratorOptions
+            from docling.datamodel.base_models import InputFormat
+            from docling.datamodel.pipeline_options import PdfPipelineOptions, EasyOcrOptions
 
-        # Customize PDF pipeline
-        pipeline_options = PdfPipelineOptions()
-        pipeline_options.do_ocr = True
-        pipeline_options.ocr_options = EasyOcrOptions(lang=['ru', 'en'], force_full_page_ocr=True)
-        pipeline_options.do_table_structure = True
-        #pipeline_options.table_structure_options.mode = TableFormerMode.ACCURATE
-        pipeline_options.accelerator_options = accelerator_options
-        pipeline_options.do_formula_enrichment = True
+            # Configure accelerator options for GPU
+            accelerator_options = AcceleratorOptions(
+                device=AcceleratorDevice.AUTO,
+            )
 
+            # Customize PDF pipeline
+            pipeline_options = PdfPipelineOptions()
+            pipeline_options.do_ocr = True
+            # Отключаем принудительный OCR для всех страниц, чтобы ускорить работу с текстовыми PDF
+            pipeline_options.ocr_options = EasyOcrOptions(lang=['ru', 'en'], force_full_page_ocr=False)
+            pipeline_options.do_table_structure = True
+            pipeline_options.accelerator_options = accelerator_options
+            # Формулы замедляют процесс
+            pipeline_options.do_formula_enrichment = True
 
-        # Apply options to converter
-        self.converter = DocumentConverter(
-            format_options={
-                InputFormat.PDF: PdfFormatOption(pipeline_options=pipeline_options)
-            }
-        )
+            # Apply options to converter
+            self._converter = DocumentConverter(
+                format_options={
+                    InputFormat.PDF: PdfFormatOption(pipeline_options=pipeline_options)
+                }
+            )
+        return self._converter
 
     def getPagesCount(self, filePath):
+        from pypdf import PdfReader
         reader = PdfReader(filePath)
         number_of_pages = len(reader.pages)
         return number_of_pages
         
     def convertPdf(self, filePath, numOfPages, offset):
-
+        from pypdf import PdfReader, PdfWriter
         reader = PdfReader(filePath)
         number_of_pages = len(reader.pages)
 
         result = str()
-        if(numOfPages + offset < number_of_pages ):
+        if(numOfPages + offset <= number_of_pages ):
             for i in range(numOfPages):
                 page = reader.pages[i + offset]
 
@@ -60,4 +62,10 @@ class Converter:
                     writer.write(tmp_path)
 
                     result += self.converter.convert(tmp_path).document.export_to_html()
+                    
+                    # Удаляем временный файл после конвертации
+                    try:
+                        os.unlink(tmp_path)
+                    except:
+                        pass
         return result

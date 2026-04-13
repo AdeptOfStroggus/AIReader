@@ -109,16 +109,33 @@ class GetResponceWorker(QThread):
 
     completed = Signal(str)
 
-    def __init__(self, client, query, text, model):
+    def __init__(self, client, query, text, model, use_rag=True):
         super().__init__()
         self.client = client
         self.query = query
         self.text = text
         self.model = model
+        self.use_rag = use_rag
 
     @Slot()
     def run(self):
-        resp = asyncio.run(self.client.CreateResponceAsync(self.model, self.query, self.text))
+        is_loading = (self.text == "Текст загружается, подождите...")
+        current_text = "[Текст текущей страницы еще загружается и пока недоступен]" if is_loading else self.text
+        context = current_text
+        
+        # Если включен RAG, ищем дополнительные фрагменты по всей книге
+        if self.use_rag and self.client.rag_manager.vector_store is not None:
+            relevant_docs = self.client.rag_manager.search(self.query, k=6) # Увеличим k до 6 для большего охвата
+            if relevant_docs:
+                rag_context = "\n\n--- НАЙДЕННАЯ ИНФОРМАЦИЯ ИЗ КНИГИ (RAG) ---\n"
+                for doc in relevant_docs:
+                    page_num = doc.metadata.get("page", 0) + 1
+                    rag_context += f"\n[Страница {page_num}]: {doc.page_content}\n"
+                
+                # Объединяем текущую страницу и найденные фрагменты
+                context = f"ТЕКУЩАЯ СТРАНИЦА:\n{current_text}\n{rag_context}"
+
+        resp = asyncio.run(self.client.CreateResponceAsync(self.model, self.query, context))
         self.completed.emit(resp)
 
 class AIAssistantPanel(QWidget):
@@ -295,13 +312,22 @@ class AIAssistantPanel(QWidget):
         self.OnRefreshModelButtonClicked()
         
     def eventFilter(self, obj, event):
-        if obj == self.promptWindow and event.type() == event.Type.Resize:
-            # Позиционируем кнопку в правом углу текстового поля
-            rect = self.promptWindow.rect()
-            self.promptEnterButton.move(rect.width() - 40, (rect.height() - 32) // 2)
+        if obj == self.promptWindow:
+            if event.type() == event.Type.Resize:
+                # Позиционируем кнопку в правом углу текстового поля
+                rect = self.promptWindow.rect()
+                self.promptEnterButton.move(rect.width() - 40, (rect.height() - 32) // 2)
+            elif event.type() == event.Type.KeyPress:
+                # Отправка по Enter, перенос строки по Shift+Enter
+                if event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
+                    if not (event.modifiers() & Qt.KeyboardModifier.ShiftModifier):
+                        self.OnPromptEnderButtonClicked()
+                        return True
         return super().eventFilter(obj, event)
 
     def OnRefreshModelButtonClicked(self):
+        if not self.client:
+            return
         if self.modelUpdateWorker and self.modelUpdateWorker.isRunning():
             return
         self.modelUpdateWorker = GetModelsWorker(self.client)
@@ -326,8 +352,16 @@ class AIAssistantPanel(QWidget):
         self.AppendToChat("Вы", query)
         self.promptWindow.clear()
         
+        text = self.readText()
+        is_loading = (text == "Текст загружается, подождите...")
+        rag_available = self.client.rag_manager.vector_store is not None
+
+        if is_loading and not rag_available:
+            self.AppendToChat("Система", "Текст страницы еще не готов и поиск по книге недоступен. Пожалуйста, подождите немного.")
+            return
+            
         self.promptWorker = GetResponceWorker(client=self.client, model=modelId, query=query,
-                                              text=self.readText())
+                                              text=text)
         self.promptWorker.completed.connect(self.OnResponceReceived)
         self.promptWorker.start()
 

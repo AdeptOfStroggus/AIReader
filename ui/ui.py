@@ -1,16 +1,16 @@
 from PySide6.QtWidgets import QApplication, QWidget, QVBoxLayout, QHBoxLayout, QMainWindow, QSplitter
 from ai_client import AIClient
 import sys
-from aiAssistant_ui import AIAssistantPanel
-from PySide6.QtCore import QRunnable, QThreadPool, QTimer, Slot, Qt
+from ui.aiAssistant_ui import AIAssistantPanel
+from PySide6.QtCore import QRunnable, QThreadPool, QTimer, Slot, Qt, QThread, Signal
 # ...
-from readerPanel import ReaderPanel
+from ui.readerPanel import ReaderPanel
 from PySide6.QtGui import QAction
 from doc_converter import Converter
 from PySide6.QtWidgets import QFileDialog
         
 class MainApp(QMainWindow):
-    def __init__(self, client):
+    def __init__(self, client=None):
         super().__init__()
 
         self.client = client
@@ -18,8 +18,9 @@ class MainApp(QMainWindow):
         self.docConverter = Converter()
         self.isDarkMode = True
 
-        self.readerPanel = ReaderPanel(self.docConverter)
-        self.AIPanel = AIAssistantPanel(client, self.readerPanel.GetConvertedText)
+        # Если клиент не передан сразу, создадим его позже или будем ждать
+        self.readerPanel = ReaderPanel(self.docConverter, self.client)
+        self.AIPanel = AIAssistantPanel(self.client, self.readerPanel.GetConvertedText)
 
         # Применяем тему
         self.ApplyTheme()
@@ -149,6 +150,13 @@ class MainApp(QMainWindow):
         self.readerPanel.SetDarkMode(self.isDarkMode)
         self.AIPanel.SetDarkMode(self.isDarkMode)
 
+    def SetClient(self, client):
+        self.client = client
+        self.readerPanel.aiClient = client
+        self.AIPanel.client = client
+        # Обновляем список моделей
+        self.AIPanel.OnRefreshModelButtonClicked()
+
     def ToggleTheme(self):
         self.isDarkMode = not self.isDarkMode
         self.ApplyTheme()
@@ -174,15 +182,28 @@ class MainApp(QMainWindow):
 
 def main():
     """Точка входа в приложение."""
-    # Создаем QApplication ДО импорта AIClient
     app = QApplication(sys.argv)
     
-    # Создаем клиент
-    client = AIClient()
-    
-    # Создаем приложение с клиентом
-    window = MainApp(client)
+    # Сначала создаем и показываем окно
+    window = MainApp()
     window.show()
+    
+    # Фоновая инициализация клиента, чтобы не блокировать интерфейс
+    class ClientInitializer(QThread):
+        finished = Signal(object)
+        def run(self):
+            client = AIClient()
+            self.finished.emit(client)
+
+    def on_client_ready(client):
+        window.SetClient(client)
+
+    # Сохраняем ссылку на поток, чтобы его не удалил GC
+    global initializer
+    initializer = ClientInitializer()
+    initializer.finished.connect(on_client_ready)
+    initializer.start()
+    
     app.exec()
 
 

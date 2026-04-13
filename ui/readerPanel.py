@@ -1,17 +1,37 @@
-from PySide6.QtWidgets import QTextEdit, QVBoxLayout, QWidget, QPushButton, QHBoxLayout, QLabel, QGridLayout, QLineEdit
-from PySide6.QtCore import Qt, Signal, QSize, QPointF, QThread
+from PySide6.QtWidgets import QTextEdit, QVBoxLayout, QWidget, QPushButton, QHBoxLayout, QLabel, QGridLayout, QLineEdit, QProgressBar
+from PySide6.QtCore import Qt, Signal, QSize, QPointF, QThread, Slot, QPropertyAnimation, QEasingCurve
 from PySide6.QtGui import QPixmap, QImage, QPainter
 from PySide6.QtPdf import QPdfDocument, QPdfLink
 from PySide6.QtPdfWidgets import QPdfView
 from doc_converter import Converter
 
+class PageConverterWorker(QThread):
+    """Рабочий поток для конвертации страницы PDF в текст."""
+    finished = Signal(int, str)  # pageIndex, resultText
+
+    def __init__(self, docConverter: Converter, filePath: str, pageIndex: int):
+        super().__init__()
+        self.docConverter = docConverter
+        self.filePath = filePath
+        self.pageIndex = pageIndex
+
+    def run(self):
+        try:
+            # Конвертируем одну страницу
+            text = self.docConverter.convertPdf(self.filePath, 1, self.pageIndex)
+            self.finished.emit(self.pageIndex, text)
+        except Exception as e:
+            print(f"Ошибка при конвертации страницы {self.pageIndex}: {e}")
+            self.finished.emit(self.pageIndex, f"Ошибка загрузки: {str(e)}")
+
 class ReaderPanel(QWidget):
-    def __init__(self, docConverter: Converter, parent=None):
+    # Добавляем сигнал о том, что страница проиндексирована
+    pageIndexed = Signal(int, str)
+
+    def __init__(self, docConverter: Converter, aiClient, parent=None):
         super().__init__(parent)
-
-
-       
-
+        self.aiClient = aiClient # Сохраняем ссылку на AIClient
+        
         #Окно с рендером PDF
         self.pdfWindow = QPdfView(self)
         self.pdfWindow.setPageMode(QPdfView.PageMode.SinglePage)
@@ -121,9 +141,24 @@ class ReaderPanel(QWidget):
         self.navigationLayout.addWidget(self.pagesLabel)
         self.navigationLayout.addWidget(self.nextPage)
 
+        # Индикатор загрузки страницы
+        self.loadingBar = QProgressBar()
+        self.loadingBar.setRange(0, 0) # Неопределенное состояние (анимация)
+        self.loadingBar.setTextVisible(False)
+        self.loadingBar.setFixedHeight(2)
+        self.loadingBar.setStyleSheet("""
+            QProgressBar {
+                background-color: transparent;
+                border: none;
+            }
+            QProgressBar::chunk {
+                background-color: #007acc;
+            }
+        """)
+        self.loadingBar.hide()
+        self.navigationLayout.addWidget(self.loadingBar)
 
-
-        #Основной layout
+        # Основной layout
         self.box = QVBoxLayout()
         
         # Контейнер для области чтения, чтобы кнопки были поверх
@@ -159,6 +194,9 @@ class ReaderPanel(QWidget):
         self.currentPage = 0
         
         self.convertedPagesCache = []
+        self.activeWorkers = {}  # pageIndex: PageConverterWorker
+        self.workerQueue = []    # Очередь индексов страниц для конвертации
+        self.maxConcurrentWorkers = 1 # Ограничиваем одним потоком, так как Docling очень тяжелый
         self.isDarkMode = True
 
         
@@ -168,9 +206,10 @@ class ReaderPanel(QWidget):
         
         text = self.convertedPagesCache[self.currentPage]
         if(text == ""):
-            self.ConvertPage(pageIndex=self.currentPage)
-        text = self.convertedPagesCache[self.currentPage]
-        self.convertedTextView.setHtml(text)
+            # Если текста нет, начинаем загрузку и возвращаем временное сообщение
+            self.LoadConvertedPage(self.currentPage)
+            return "Текст загружается, подождите..."
+        
         return self.convertedTextView.toPlainText()
 
     def SwitchModes(self):
@@ -178,6 +217,8 @@ class ReaderPanel(QWidget):
             self.originalMode = False
             self.convertedTextView.show()
             self.pdfWindow.hide()
+            # При переключении в текстовый режим убеждаемся, что текущая страница загружена
+            self.LoadConvertedPage(self.currentPage)
         else:
             self.originalMode = True
             self.convertedTextView.hide()
@@ -195,28 +236,120 @@ class ReaderPanel(QWidget):
         self.pdfWindow.setDocument(self.document)
         self.convertedPagesCache.clear()
         self.convertedPagesCache = [str() for x in range(self.maxPages)]
+        
+        # Очищаем старые воркеры, очередь и векторную базу
+        for worker in self.activeWorkers.values():
+            worker.terminate()
+            worker.wait()
+        self.activeWorkers.clear()
+        self.workerQueue.clear()
+        self.aiClient.rag_manager.clear() # Очищаем FAISS индекс
+
         print(self.convertedPagesCache)
         #self.LoadConvertedPage(0)
         self.SetPdfPage(0)
 
         self.currentPage=0
         self.setPagesCount(self.currentPage)
+        self.LoadConvertedPage(self.currentPage) # Загружаем первую страницу
         self.navigationOverlay.raise_()
 
-    def ConvertPage(self, pageIndex):
-        text = self.docConverter.convertPdf(self.currentFilePath, 1, pageIndex)
+    def ConvertPage(self, pageIndex, priority=False):
+        # Если страница уже в кэше или уже обрабатывается
+        if self.convertedPagesCache[pageIndex] != "" or pageIndex in self.activeWorkers:
+            return
+            
+        # Если страница уже в очереди, перемещаем ее в начало, если это приоритет
+        if pageIndex in self.workerQueue:
+            if priority:
+                self.workerQueue.remove(pageIndex)
+                self.workerQueue.insert(0, pageIndex)
+        else:
+            if priority:
+                self.workerQueue.insert(0, pageIndex)
+            else:
+                self.workerQueue.append(pageIndex)
+                
+        self.ProcessQueue()
+
+    def ProcessQueue(self):
+        # Если лимит воркеров исчерпан или очередь пуста
+        if len(self.activeWorkers) >= self.maxConcurrentWorkers or not self.workerQueue:
+            return
+            
+        # Берем следующую страницу из очереди
+        pageIndex = self.workerQueue.pop(0)
+        
+        # На всякий случай проверяем еще раз
+        if self.convertedPagesCache[pageIndex] != "" or pageIndex in self.activeWorkers:
+            self.ProcessQueue()
+            return
+            
+        worker = PageConverterWorker(self.docConverter, self.currentFilePath, pageIndex)
+        worker.finished.connect(self.OnPageConverted)
+        self.activeWorkers[pageIndex] = worker
+        worker.start()
+
+    @Slot(int, str)
+    def OnPageConverted(self, pageIndex, text):
+        # Удаляем воркера из активных и очищаем память воркера
+        if pageIndex in self.activeWorkers:
+            worker = self.activeWorkers.pop(pageIndex)
+            worker.wait()
+            worker.deleteLater()
+            
         self.convertedPagesCache[pageIndex] = text
+        
+        # Индексируем текст в FAISS
+        self.aiClient.rag_manager.add_page_text(text, pageIndex)
+        
+        # Если это текущая страница, обновляем UI
+        if pageIndex == self.currentPage:
+            self.convertedTextView.setHtml(text)
+            self.loadingBar.hide()
+            
+        # Запускаем предзагрузку соседних страниц
+        self.PreloadAdjacentPages()
+        
+        # Обрабатываем следующую страницу из очереди
+        self.ProcessQueue()
+
+    def PreloadAdjacentPages(self):
+        # Предзагружаем следующую и предыдущую страницы (без приоритета)
+        for offset in [1, -1, 2]: # Загружаем вперед на 2 и назад на 1
+            idx = self.currentPage + offset
+            if 0 <= idx < self.maxPages and self.convertedPagesCache[idx] == "":
+                self.ConvertPage(idx, priority=False)
 
     def LoadConvertedPage(self, pageIndex):
-        if(pageIndex < 0 and pageIndex > self.maxPages): pass
+        if pageIndex < 0 or pageIndex >= self.maxPages:
+            return
+            
+        if self.convertedPagesCache[pageIndex] == "":
+            # Показываем индикатор загрузки
+            self.loadingBar.show()
+            
+            # Если идет загрузка, показываем это
+            if pageIndex in self.activeWorkers or pageIndex in self.workerQueue:
+                self.convertedTextView.setHtml("<h2 style='color: #888; text-align: center; margin-top: 50px;'>Страница в очереди или загружается...</h2>")
+            
+            # Добавляем в очередь с высоким приоритетом
+            self.ConvertPage(pageIndex, priority=True)
         else:
-            #if(self.convertedPagesCache[pageIndex] == ""):
-               # self.ConvertPage(pageIndex=pageIndex)
+            self.loadingBar.hide()
             self.convertedTextView.setHtml(self.convertedPagesCache[pageIndex])
+            # Даже если страница в кэше, пробуем предзагрузить соседей
+            self.PreloadAdjacentPages()
 
     def SetPdfPage(self, pageIndex):
         pass
         
+    def closeEvent(self, event):
+        # Останавливаем все фоновые задачи при закрытии
+        for worker in self.activeWorkers.values():
+            worker.terminate()
+            worker.wait()
+        super().closeEvent(event)
 
     def OnPrevPageButtonClicked(self):
         if(self.currentPage - 1 >= 0):
@@ -285,6 +418,15 @@ class ReaderPanel(QWidget):
                 }
             """)
             self.pagesLabel.setStyleSheet("background: transparent; color: #808080; font-size: 12px;")
+            self.loadingBar.setStyleSheet("""
+                QProgressBar {
+                    background-color: transparent;
+                    border: none;
+                }
+                QProgressBar::chunk {
+                    background-color: #007acc;
+                }
+            """)
         else:
             self.pdfWindow.setStyleSheet("background-color: #ffffff;")
             self.convertedTextView.setStyleSheet("""
@@ -336,6 +478,15 @@ class ReaderPanel(QWidget):
                 }
             """)
             self.pagesLabel.setStyleSheet("background: transparent; color: #666666; font-size: 12px;")
+            self.loadingBar.setStyleSheet("""
+                QProgressBar {
+                    background-color: transparent;
+                    border: none;
+                }
+                QProgressBar::chunk {
+                    background-color: #0078d4;
+                }
+            """)
 
     def setPagesCount(self, current_page: int = 1):
         self.pagesLabel.setText(f"{current_page+1} из {self.maxPages}")
