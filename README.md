@@ -1,59 +1,69 @@
 # AIReader
 
-AI-powered PDF reader with intelligent document processing and analysis capabilities.
+AIReader — это PDF-ридер на базе ИИ с возможностями интеллектуальной обработки и анализа документов.
 
-## Description
+## Описание
 
-AIReader is a Python application that combines PDF file reading with artificial intelligence functionality. The application provides an intuitive interface for working with PDF documents while leveraging AI models for enhanced document understanding and processing.
+AIReader — это приложение на Python, объединяющее чтение PDF-файлов с функциями искусственного интеллекта. Приложение предоставляет интуитивно понятный интерфейс для работы с PDF-документами, используя модели ИИ для глубокого понимания и обработки контента.
 
-## Features
+## Основные возможности
 
-- PDF file reading and display
-- AI-powered document analysis
-- Intelligent page conversion and processing
-- User-friendly graphical interface
-- GPU acceleration support for fast page conversion
+- Чтение и отображение PDF-файлов.
+- Анализ документов с помощью ИИ (интеграция с Together AI).
+- Интеллектуальная конвертация и обработка страниц (с использованием Docling и EasyOCR).
+- Удобный графический интерфейс на PySide6.
+- Поддержка ускорения на GPU для быстрой конвертации страниц.
 
-## Requirements
+## Текущие изменения (Последние обновления)
 
-- Python 3.14 or higher
-- GPU support (optional, recommended for optimal performance during page conversion)
+- **Миграция на Together AI**: Теперь приложение использует API Together AI для работы с языковыми моделями.
+- **Переход на `uv`**: Управление зависимостями и виртуальным окружением теперь осуществляется через современный инструмент `uv` вместо стандартного `pip`.
+- **Улучшенный UI**: Обновлен пользовательский интерфейс для более удобной работы.
+- **Проверка статуса моделей**: Добавлена возможность проверки, является ли модель "serverless".
+- **Оптимизация OCR**: Переработаны параметры OCR и улучшена обработка конвертации страниц в ReaderPanel.
 
-## Installation
+## Требования
 
-1. Clone the repository:
+- Python 3.11 или выше.
+- Поддержка GPU (опционально, рекомендуется для оптимальной производительности при конвертации страниц).
+
+## Установка
+
+Для управления проектом рекомендуется использовать [uv](https://github.com/astral-sh/uv).
+
+1. Клонируйте репозиторий:
 ```bash
 git clone https://github.com/AdeptOfStroggus/AIReader.git
 cd AIReader
 ```
 
-2. Install dependencies:
+2. Установите зависимости с помощью `uv`:
 ```bash
-pip install -r requirements.txt
+uv sync
 ```
 
-3. Configure environment variables:
+3. Настройте переменные окружения:
 ```bash
 cp .env.example .env
 ```
 
-Edit the `.env` file and add your API keys and configuration parameters as needed.
+Отредактируйте файл `.env`, добавив ваши API-ключи (включая ключ Together AI) и необходимые параметры конфигурации.
 
-## Usage
+## Использование
 
-To start the application:
+Для запуска приложения:
 ```bash
-python ui.py
+uv run ui.py
 ```
 
-## Performance Recommendations
+## Рекомендации по производительности
 
-For optimal performance when converting PDF pages, it is strongly recommended to use a GPU. GPU acceleration significantly speeds up page processing and rendering compared to CPU-only mode.
+Для достижения максимальной скорости при конвертации страниц PDF настоятельно рекомендуется использовать GPU. Ускорение на GPU значительно повышает скорость обработки и рендеринга страниц по сравнению с режимом использования только CPU.
 
-## License
+## Лицензия
 
-This project is licensed under the GNU Affero General Public License v3.0 - see the LICENSE file for details.
+Этот проект лицензируется под лицензией GNU Affero General Public License v3.0 — подробности см. в файле LICENSE.
 
-## Contributing
+## Участие в разработке
 
-Contributions are welcome. Please feel free to submit issues and pull requests.
+Мы приветствуем вклад в развитие проекта. Пожалуйста, создавайте Issues и Pull Requests.
