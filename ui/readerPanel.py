@@ -1,6 +1,6 @@
-from PySide6.QtWidgets import QTextEdit, QVBoxLayout, QWidget, QPushButton, QHBoxLayout, QLabel, QGridLayout, QLineEdit, QProgressBar
+from PySide6.QtWidgets import QTextEdit, QVBoxLayout, QWidget, QPushButton, QHBoxLayout, QLabel, QGridLayout, QLineEdit, QProgressBar, QComboBox
 from PySide6.QtCore import Qt, Signal, QSize, QPointF, QThread, Slot, QPropertyAnimation, QEasingCurve
-from PySide6.QtGui import QPixmap, QImage, QPainter
+from PySide6.QtGui import QPixmap, QImage, QPainter, QColor
 from PySide6.QtPdf import QPdfDocument, QPdfLink
 from PySide6.QtPdfWidgets import QPdfView
 from doc_converter import Converter
@@ -158,6 +158,54 @@ class ReaderPanel(QWidget):
         self.loadingBar.hide()
         self.navigationLayout.addWidget(self.loadingBar)
 
+        # Выпадающий список статуса страниц (верхний правый угол)
+        self.statusOverlay = QWidget()
+        self.statusOverlay.setStyleSheet("""
+            QWidget {
+                background-color: rgba(37, 37, 38, 220);
+                border: 1px solid #3c3c3c;
+                border-radius: 4px;
+            }
+        """)
+        self.statusOverlay.setFixedWidth(180)
+        self.statusOverlay.setFixedHeight(40)
+        
+        self.statusCombo = QComboBox()
+        self.statusCombo.currentIndexChanged.connect(self.OnStatusComboChanged)
+        self.statusCombo.setStyleSheet("""
+            QComboBox {
+                border: none;
+                background-color: transparent;
+                color: #cccccc;
+                padding: 4px 10px;
+                font-size: 12px;
+            }
+            QComboBox::drop-down {
+                subcontrol-origin: padding;
+                subcontrol-position: top right;
+                width: 20px;
+                border: none;
+            }
+            QComboBox::down-arrow {
+                image: none;
+                border-left: 4px solid transparent;
+                border-right: 4px solid transparent;
+                border-top: 5px solid #cccccc;
+                margin-right: 8px;
+            }
+            QComboBox QAbstractItemView {
+                background-color: #252526;
+                color: #cccccc;
+                border: 1px solid #454545;
+                selection-background-color: #094771;
+                outline: 0px;
+            }
+        """)
+        
+        self.statusLayout = QHBoxLayout(self.statusOverlay)
+        self.statusLayout.setContentsMargins(5, 5, 5, 5)
+        self.statusLayout.addWidget(self.statusCombo)
+
         # Основной layout
         self.box = QVBoxLayout()
         
@@ -170,10 +218,12 @@ class ReaderPanel(QWidget):
         self.readingLayout.addWidget(self.pdfWindow, 0, 0)
         self.readingLayout.addWidget(self.convertedTextView, 0, 0)
         
-        # Добавляем оверлей навигации в верхний левый угол
+        # Добавляем оверлеи
         self.readingLayout.addWidget(self.navigationOverlay, 0, 0, Qt.AlignLeft | Qt.AlignTop)
+        self.readingLayout.addWidget(self.statusOverlay, 0, 0, Qt.AlignRight | Qt.AlignTop)
         
         self.navigationOverlay.raise_()
+        self.statusOverlay.raise_()
 
         self.box.addWidget(self.readingContainer)
         self.box.setStretch(0,1)
@@ -196,6 +246,7 @@ class ReaderPanel(QWidget):
         self.convertedPagesCache = []
         self.activeWorkers = {}  # pageIndex: PageConverterWorker
         self.workerQueue = []    # Очередь индексов страниц для конвертации
+        self.pendingQueueUpdate = False # Флаг отложенного обновления очереди
         self.maxConcurrentWorkers = 1 # Ограничиваем одним потоком, так как Docling очень тяжелый
         self.isDarkMode = True
 
@@ -233,6 +284,15 @@ class ReaderPanel(QWidget):
         self.currentFilePath = filePath
         self.document.load(filePath)
         self.maxPages = self.docConverter.getPagesCount(filePath)
+        
+        # Обновляем выпадающий список страниц
+        self.statusCombo.blockSignals(True)
+        self.statusCombo.clear()
+        for i in range(self.maxPages):
+            self.statusCombo.addItem(f"Стр. {i+1} - ◌ Ожидание")
+            self.statusCombo.setItemData(i, QColor("#888888"), Qt.ItemDataRole.ForegroundRole)
+        self.statusCombo.blockSignals(False)
+
         self.pdfWindow.setDocument(self.document)
         self.convertedPagesCache.clear()
         self.convertedPagesCache = [str() for x in range(self.maxPages)]
@@ -243,6 +303,7 @@ class ReaderPanel(QWidget):
             worker.wait()
         self.activeWorkers.clear()
         self.workerQueue.clear()
+        self.pendingQueueUpdate = False
         self.aiClient.rag_manager.clear() # Очищаем FAISS индекс
 
         print(self.convertedPagesCache)
@@ -254,22 +315,62 @@ class ReaderPanel(QWidget):
         self.LoadConvertedPage(self.currentPage) # Загружаем первую страницу
         self.navigationOverlay.raise_()
 
-    def ConvertPage(self, pageIndex, priority=False):
-        # Если страница уже в кэше или уже обрабатывается
-        if self.convertedPagesCache[pageIndex] != "" or pageIndex in self.activeWorkers:
+    def UpdatePageStatus(self, pageIndex):
+        """Обновляет текст и цвет элемента в выпадающем списке статуса."""
+        if pageIndex < 0 or pageIndex >= self.statusCombo.count():
             return
             
-        # Если страница уже в очереди, перемещаем ее в начало, если это приоритет
-        if pageIndex in self.workerQueue:
-            if priority:
-                self.workerQueue.remove(pageIndex)
-                self.workerQueue.insert(0, pageIndex)
+        status_text = ""
+        color = "#888888" # По умолчанию серый
+        
+        if self.convertedPagesCache[pageIndex] != "":
+            status_text = "✓ Готово"
+            color = "#4ec9b0" # Зеленый
+        elif pageIndex in self.activeWorkers:
+            status_text = "● Обработка..."
+            color = "#007acc" # Синий
+        elif pageIndex in self.workerQueue:
+            status_text = "○ В очереди"
+            color = "#cccccc" # Светло-серый
         else:
-            if priority:
-                self.workerQueue.insert(0, pageIndex)
-            else:
-                self.workerQueue.append(pageIndex)
+            status_text = "◌ Ожидание"
+            color = "#888888" # Серый
+            
+        self.statusCombo.setItemText(pageIndex, f"Стр. {pageIndex + 1} - {status_text}")
+        self.statusCombo.setItemData(pageIndex, QColor(color), Qt.ItemDataRole.ForegroundRole)
+
+    def OnStatusComboChanged(self, index):
+        """Переход на страницу при выборе в выпадающем списке."""
+        if index != self.currentPage and index >= 0:
+            self.currentPage = index
+            self.LoadConvertedPage(self.currentPage)
+            self.pdfWindow.pageNavigator().jump(self.currentPage, QPointF(0, 0), 1.0)
+            self.setPagesCount(self.currentPage)
+
+    def UpdateQueueOrder(self):
+        """Переупорядочивает очередь оцифровки: сначала текущая, затем все слева, затем все справа."""
+        self.workerQueue.clear()
+        
+        # 1. Текущая страница (самый высокий приоритет)
+        if self.convertedPagesCache[self.currentPage] == "" and self.currentPage not in self.activeWorkers:
+            self.workerQueue.append(self.currentPage)
+            
+        # 2. Все страницы слева (от текущей к началу)
+        for i in range(self.currentPage - 1, -1, -1):
+            if self.convertedPagesCache[i] == "" and i not in self.activeWorkers:
+                if i not in self.workerQueue:
+                    self.workerQueue.append(i)
                 
+        # 3. Все страницы справа (от текущей к концу)
+        for i in range(self.currentPage + 1, self.maxPages):
+            if self.convertedPagesCache[i] == "" and i not in self.activeWorkers:
+                if i not in self.workerQueue:
+                    self.workerQueue.append(i)
+        
+        # Обновляем все статусы в комбобоксе
+        for i in range(self.maxPages):
+            self.UpdatePageStatus(i)
+            
         self.ProcessQueue()
 
     def ProcessQueue(self):
@@ -288,6 +389,8 @@ class ReaderPanel(QWidget):
         worker = PageConverterWorker(self.docConverter, self.currentFilePath, pageIndex)
         worker.finished.connect(self.OnPageConverted)
         self.activeWorkers[pageIndex] = worker
+        # Обновляем статус на "Обработка"
+        self.UpdatePageStatus(pageIndex)
         worker.start()
 
     @Slot(int, str)
@@ -303,23 +406,21 @@ class ReaderPanel(QWidget):
         # Индексируем текст в FAISS
         self.aiClient.rag_manager.add_page_text(text, pageIndex)
         
+        # Обновляем статус страницы в списке
+        self.UpdatePageStatus(pageIndex)
+        
         # Если это текущая страница, обновляем UI
         if pageIndex == self.currentPage:
             self.convertedTextView.setHtml(text)
             self.loadingBar.hide()
             
-        # Запускаем предзагрузку соседних страниц
-        self.PreloadAdjacentPages()
-        
-        # Обрабатываем следующую страницу из очереди
-        self.ProcessQueue()
-
-    def PreloadAdjacentPages(self):
-        # Предзагружаем следующую и предыдущую страницы (без приоритета)
-        for offset in [1, -1, 2]: # Загружаем вперед на 2 и назад на 1
-            idx = self.currentPage + offset
-            if 0 <= idx < self.maxPages and self.convertedPagesCache[idx] == "":
-                self.ConvertPage(idx, priority=False)
+        # Если есть отложенное обновление очереди, выполняем его сейчас
+        if self.pendingQueueUpdate:
+            self.pendingQueueUpdate = False
+            self.UpdateQueueOrder()
+        else:
+            # Иначе просто берем следующую задачу
+            self.ProcessQueue()
 
     def LoadConvertedPage(self, pageIndex):
         if pageIndex < 0 or pageIndex >= self.maxPages:
@@ -333,13 +434,19 @@ class ReaderPanel(QWidget):
             if pageIndex in self.activeWorkers or pageIndex in self.workerQueue:
                 self.convertedTextView.setHtml("<h2 style='color: #888; text-align: center; margin-top: 50px;'>Страница в очереди или загружается...</h2>")
             
-            # Добавляем в очередь с высоким приоритетом
-            self.ConvertPage(pageIndex, priority=True)
+            # Если есть активные воркера, откладываем обновление очереди
+            if self.activeWorkers:
+                self.pendingQueueUpdate = True
+            else:
+                self.UpdateQueueOrder()
         else:
             self.loadingBar.hide()
             self.convertedTextView.setHtml(self.convertedPagesCache[pageIndex])
-            # Даже если страница в кэше, пробуем предзагрузить соседей
-            self.PreloadAdjacentPages()
+            # Даже если страница в кэше, обновляем очередь (или откладываем обновление)
+            if self.activeWorkers:
+                self.pendingQueueUpdate = True
+            else:
+                self.UpdateQueueOrder()
 
     def SetPdfPage(self, pageIndex):
         pass
@@ -365,59 +472,63 @@ class ReaderPanel(QWidget):
             self.pdfWindow.pageNavigator().jump(self.currentPage,QPointF(0,0),1.0)
             self.setPagesCount(self.currentPage)
 
-    def SetDarkMode(self, is_dark):
+    def SetDarkMode(self, is_dark, fs=14):
         self.isDarkMode = is_dark
+        common_style = f"font-size: {fs}px;"
+        
         if is_dark:
             self.pdfWindow.setStyleSheet("background-color: #1e1e1e;")
-            self.convertedTextView.setStyleSheet("""
-                QTextEdit {
+            self.convertedTextView.setStyleSheet(f"""
+                QTextEdit {{
                     background-color: #1e1e1e;
                     color: #d4d4d4;
                     border: none;
                     padding: 20px;
-                    font-size: 14px;
                     line-height: 1.6;
-                }
+                    {common_style}
+                }}
             """)
-            self.navigationOverlay.setStyleSheet("""
-                QWidget {
+            self.navigationOverlay.setStyleSheet(f"""
+                QWidget {{
                     background-color: rgba(37, 37, 38, 220);
                     border: 1px solid #3c3c3c;
                     border-radius: 4px;
-                }
+                }}
             """)
-            button_style = """
-                QPushButton {
+            button_style = f"""
+                QPushButton {{
                     background-color: transparent;
                     color: #cccccc;
                     border-radius: 4px;
-                    font-size: 16px;
                     font-weight: bold;
                     border: none;
-                }
-                QPushButton:hover {
+                    {common_style}
+                    font-size: {fs + 2}px;
+                }}
+                QPushButton:hover {{
                     background-color: #3c3c3c;
                     color: #ffffff;
-                }
-                QPushButton:pressed {
+                }}
+                QPushButton:pressed {{
                     background-color: #007acc;
-                }
+                }}
             """
             self.prevPage.setStyleSheet(button_style)
             self.nextPage.setStyleSheet(button_style)
-            self.jumpPage.setStyleSheet("""
-                QLineEdit {
+            self.jumpPage.setStyleSheet(f"""
+                QLineEdit {{
                     background-color: #3c3c3c; 
                     border-radius: 2px; 
                     border: 1px solid #3c3c3c;
                     color: #cccccc;
-                    font-size: 12px;
-                }
-                QLineEdit:focus {
+                    {common_style}
+                    font-size: {fs - 2}px;
+                }}
+                QLineEdit:focus {{
                     border: 1px solid #007acc;
-                }
+                }}
             """)
-            self.pagesLabel.setStyleSheet("background: transparent; color: #808080; font-size: 12px;")
+            self.pagesLabel.setStyleSheet(f"background: transparent; color: #808080; {common_style} font-size: {fs - 2}px;")
             self.loadingBar.setStyleSheet("""
                 QProgressBar {
                     background-color: transparent;
@@ -427,57 +538,98 @@ class ReaderPanel(QWidget):
                     background-color: #007acc;
                 }
             """)
+            self.statusOverlay.setStyleSheet(f"""
+                QWidget {{
+                    background-color: rgba(37, 37, 38, 220);
+                    border: 1px solid #3c3c3c;
+                    border-radius: 4px;
+                }}
+            """)
+            self.statusCombo.setStyleSheet(f"""
+                QComboBox {{
+                    border: none;
+                    background-color: transparent;
+                    color: #cccccc;
+                    padding: 4px 10px;
+                    {common_style}
+                    font-size: {fs - 2}px;
+                }}
+                QComboBox::drop-down {{
+                    subcontrol-origin: padding;
+                    subcontrol-position: top right;
+                    width: 20px;
+                    border: none;
+                }}
+                QComboBox::down-arrow {{
+                    image: none;
+                    border-left: 4px solid transparent;
+                    border-right: 4px solid transparent;
+                    border-top: 5px solid #cccccc;
+                    margin-right: 8px;
+                }}
+                QComboBox QAbstractItemView {{
+                    background-color: #252526;
+                    color: #cccccc;
+                    border: 1px solid #454545;
+                    selection-background-color: #094771;
+                    outline: 0px;
+                    {common_style}
+                    font-size: {fs - 2}px;
+                }}
+            """)
         else:
             self.pdfWindow.setStyleSheet("background-color: #ffffff;")
-            self.convertedTextView.setStyleSheet("""
-                QTextEdit {
+            self.convertedTextView.setStyleSheet(f"""
+                QTextEdit {{
                     background-color: #ffffff;
                     color: #333333;
                     border: none;
                     padding: 20px;
-                    font-size: 14px;
                     line-height: 1.6;
-                }
+                    {common_style}
+                }}
             """)
-            self.navigationOverlay.setStyleSheet("""
-                QWidget {
+            self.navigationOverlay.setStyleSheet(f"""
+                QWidget {{
                     background-color: rgba(255, 255, 255, 220);
                     border: 1px solid #dddddd;
                     border-radius: 4px;
-                }
+                }}
             """)
-            button_style = """
-                QPushButton {
+            button_style = f"""
+                QPushButton {{
                     background-color: transparent;
                     color: #333333;
                     border-radius: 4px;
-                    font-size: 16px;
                     font-weight: bold;
                     border: none;
-                }
-                QPushButton:hover {
-                    background-color: #f0f0f0;
-                    color: #0078d4;
-                }
-                QPushButton:pressed {
-                    background-color: #e5e5e5;
-                }
+                    {common_style}
+                    font-size: {fs + 2}px;
+                }}
+                QPushButton:hover {{
+                    background-color: #eeeeee;
+                }}
+                QPushButton:pressed {{
+                    background-color: #0078d4;
+                    color: #ffffff;
+                }}
             """
             self.prevPage.setStyleSheet(button_style)
             self.nextPage.setStyleSheet(button_style)
-            self.jumpPage.setStyleSheet("""
-                QLineEdit {
-                    background-color: #ffffff; 
+            self.jumpPage.setStyleSheet(f"""
+                QLineEdit {{
+                    background-color: #f3f3f3; 
                     border-radius: 2px; 
                     border: 1px solid #cccccc;
                     color: #333333;
-                    font-size: 12px;
-                }
-                QLineEdit:focus {
+                    {common_style}
+                    font-size: {fs - 2}px;
+                }}
+                QLineEdit:focus {{
                     border: 1px solid #0078d4;
-                }
+                }}
             """)
-            self.pagesLabel.setStyleSheet("background: transparent; color: #666666; font-size: 12px;")
+            self.pagesLabel.setStyleSheet(f"background: transparent; color: #666666; {common_style} font-size: {fs - 2}px;")
             self.loadingBar.setStyleSheet("""
                 QProgressBar {
                     background-color: transparent;
@@ -486,6 +638,46 @@ class ReaderPanel(QWidget):
                 QProgressBar::chunk {
                     background-color: #0078d4;
                 }
+            """)
+            self.statusOverlay.setStyleSheet(f"""
+                QWidget {{
+                    background-color: rgba(255, 255, 255, 220);
+                    border: 1px solid #dddddd;
+                    border-radius: 4px;
+                }}
+            """)
+            self.statusCombo.setStyleSheet(f"""
+                QComboBox {{
+                    border: none;
+                    background-color: transparent;
+                    color: #333333;
+                    padding: 4px 10px;
+                    {common_style}
+                    font-size: {fs - 2}px;
+                }}
+                QComboBox::drop-down {{
+                    subcontrol-origin: padding;
+                    subcontrol-position: top right;
+                    width: 20px;
+                    border: none;
+                }}
+                QComboBox::down-arrow {{
+                    image: none;
+                    border-left: 4px solid transparent;
+                    border-right: 4px solid transparent;
+                    border-top: 5px solid #333333;
+                    margin-right: 8px;
+                }}
+                QComboBox QAbstractItemView {{
+                    background-color: #ffffff;
+                    color: #333333;
+                    border: 1px solid #cccccc;
+                    selection-background-color: #0078d4;
+                    selection-color: #ffffff;
+                    outline: 0px;
+                    {common_style}
+                    font-size: {fs - 2}px;
+                }}
             """)
 
     def setPagesCount(self, current_page: int = 1):

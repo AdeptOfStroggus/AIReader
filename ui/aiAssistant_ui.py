@@ -16,6 +16,7 @@ from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QColor, QFont
 from ai_client import AIClient
 import asyncio
+import re
 from PySide6.QtCore import QRunnable, QThreadPool, QTimer, Slot, QThread, Signal, Qt
 
 class MessageBubble(QWidget):
@@ -56,7 +57,7 @@ class MessageBubble(QWidget):
             main_layout.addLayout(bubble_container)
             self.header.setContentsMargins(10, 0, 0, 0)
 
-    def update_style(self, is_user, is_dark):
+    def update_style(self, is_user, is_dark, fs=13):
         if is_user:
             bg_color = "#007acc"
             text_color = "white"
@@ -80,12 +81,10 @@ class MessageBubble(QWidget):
                 border-radius: 12px;
                 border: {border};
                 padding: 8px 12px;
-                font-size: 13px;
+                font-size: {fs}px;
             }}
         """)
-        # Хак для имитации специфических углов в Qt QLabel (border-radius применяется ко всем углам)
-        # Для реальных специфических углов нужно рисовать через QPainter, 
-        # но для начала сделаем просто аккуратные закругления.
+        self.header.setStyleSheet(f"color: #888888; font-size: {fs - 3}px; font-weight: bold;")
 
 class GetModelsWorker(QThread):
     """Worker thread."""
@@ -121,19 +120,47 @@ class GetResponceWorker(QThread):
     def run(self):
         is_loading = (self.text == "Текст загружается, подождите...")
         current_text = "[Текст текущей страницы еще загружается и пока недоступен]" if is_loading else self.text
-        context = current_text
         
-        # Если включен RAG, ищем дополнительные фрагменты по всей книге
-        if self.use_rag and self.client.rag_manager.vector_store is not None:
-            relevant_docs = self.client.rag_manager.search(self.query, k=6) # Увеличим k до 6 для большего охвата
+        # 1. Парсим запрос на наличие указаний конкретных страниц
+        # Поддерживаемые форматы: "стр 5", "страница 10", "стр. 12-15", "страницы 1, 3, 5"
+        page_numbers = []
+        
+        # Поиск диапазонов: "12-15"
+        range_matches = re.findall(r'(?:стр|страниц[аеы])\.?\s*(\d+)\s*-\s*(\d+)', self.query, re.IGNORECASE)
+        for start, end in range_matches:
+            page_numbers.extend(range(int(start), int(end) + 1))
+            
+        # Поиск отдельных страниц: "стр 5", "стр. 10"
+        single_matches = re.findall(r'(?:стр|страниц[аеы])\.?\s*(\d+)(?!\s*-)', self.query, re.IGNORECASE)
+        for p in single_matches:
+            if int(p) not in page_numbers:
+                page_numbers.append(int(p))
+
+        context = ""
+        rag_available = self.client.rag_manager.vector_store is not None
+        
+        if self.use_rag and rag_available:
+            # Если пользователь указал конкретные страницы, ищем только по ним
+            if page_numbers:
+                relevant_docs = self.client.rag_manager.search(self.query, k=10, page_numbers=page_numbers)
+                context_header = f"\n--- ИНФОРМАЦИЯ ИЗ ВЫБРАННЫХ СТРАНИЦ ({', '.join(map(str, sorted(page_numbers)))}) ---\n"
+            else:
+                # Если не указал, ищем по всей книге в равной степени
+                relevant_docs = self.client.rag_manager.search(self.query, k=10)
+                context_header = "\n--- НАЙДЕННАЯ ИНФОРМАЦИЯ ИЗ ВСЕЙ КНИГИ (RAG) ---\n"
+            
             if relevant_docs:
-                rag_context = "\n\n--- НАЙДЕННАЯ ИНФОРМАЦИЯ ИЗ КНИГИ (RAG) ---\n"
+                rag_context = context_header
                 for doc in relevant_docs:
                     page_num = doc.metadata.get("page", 0) + 1
                     rag_context += f"\n[Страница {page_num}]: {doc.page_content}\n"
                 
-                # Объединяем текущую страницу и найденные фрагменты
+                # Добавляем также текст текущей страницы для контекста "здесь и сейчас"
                 context = f"ТЕКУЩАЯ СТРАНИЦА:\n{current_text}\n{rag_context}"
+            else:
+                context = f"ТЕКУЩАЯ СТРАНИЦА:\n{current_text}\n(По вашему запросу ничего не найдено в других частях книги)"
+        else:
+            context = f"ТЕКУЩАЯ СТРАНИЦА:\n{current_text}"
 
         resp = asyncio.run(self.client.CreateResponceAsync(self.model, self.query, context))
         self.completed.emit(resp)
@@ -374,6 +401,9 @@ class AIAssistantPanel(QWidget):
         
         # Создаем виджет сообщения (бабл)
         bubble = MessageBubble(sender, message, is_user, self.isDarkMode)
+        # Применяем текущий размер шрифта
+        if hasattr(self, 'currentFontSize'):
+            bubble.update_style(is_user, self.isDarkMode, self.currentFontSize - 1)
         self.chatHistoryLayout.addWidget(bubble)
         
         # Прокрутка вниз
@@ -408,175 +438,187 @@ class AIAssistantPanel(QWidget):
         # Возвращаем оригинальный ID из userData
         return self.modelSelector.currentData()
     
-    def SetDarkMode(self, is_dark):
+    def SetDarkMode(self, is_dark, fs=14):
         self.isDarkMode = is_dark
+        self.currentFontSize = fs
+        common_style = f"font-size: {fs}px;"
+        
+        # Обновляем все существующие сообщения в чате
+        for i in range(self.chatHistoryLayout.count()):
+            widget = self.chatHistoryLayout.itemAt(i).widget()
+            if isinstance(widget, MessageBubble):
+                is_user = (widget.header.text() == "Вы")
+                widget.update_style(is_user, is_dark, fs - 1)
+
         if is_dark:
-            self.modelSelector.setStyleSheet("""
-                QComboBox {
+            self.modelSelector.setStyleSheet(f"""
+                QComboBox {{
                     border: 1px solid #3c3c3c;
                     border-radius: 4px;
                     padding: 4px 10px;
                     background-color: #3c3c3c;
                     color: #cccccc;
                     min-height: 24px;
-                    font-size: 12px;
-                }
-                QComboBox::drop-down {
+                    {common_style}
+                    font-size: {fs - 2}px;
+                }}
+                QComboBox::drop-down {{
                     subcontrol-origin: padding;
                     subcontrol-position: top right;
                     width: 20px;
                     border-left: none;
-                }
-                QComboBox::down-arrow {
+                }}
+                QComboBox::down-arrow {{
                     image: none;
                     border-left: 4px solid transparent;
                     border-right: 4px solid transparent;
                     border-top: 5px solid #cccccc;
-                }
-                QComboBox QAbstractItemView {
+                }}
+                QComboBox QAbstractItemView {{
                     background-color: #252526;
                     color: #cccccc;
                     border: 1px solid #454545;
                     selection-background-color: #094771;
                     outline: 0px;
-                }
+                    {common_style}
+                    font-size: {fs - 2}px;
+                }}
             """)
-            self.chatWindow.setStyleSheet("border: 1px solid #3c3c3c; border-radius: 4px; background-color: #1e1e1e;")
+            self.chatWindow.setStyleSheet(f"border: 1px solid #3c3c3c; border-radius: 4px; background-color: #1e1e1e;")
             self.chatHistoryWidget.setStyleSheet("background-color: #1e1e1e;")
-            self.promptWindow.setStyleSheet("""
-                QTextEdit {
+            self.promptWindow.setStyleSheet(f"""
+                QTextEdit {{
                     border: 1px solid #3c3c3c;
                     border-radius: 4px;
                     padding: 8px 40px 8px 10px;
                     background-color: #3c3c3c;
                     color: #cccccc;
-                    font-size: 13px;
-                }
-                QTextEdit:focus {
+                    {common_style}
+                    font-size: {fs - 1}px;
+                }}
+                QTextEdit:focus {{
                     border: 1px solid #007acc;
-                }
+                }}
             """)
-            self.promptEnterButton.setStyleSheet("""
-                QPushButton {
+            self.promptEnterButton.setStyleSheet(f"""
+                QPushButton {{
                     background-color: #007acc;
                     color: white;
                     border-radius: 4px;
-                    font-size: 16px;
                     font-weight: bold;
                     border: none;
-                }
-                QPushButton:hover {
+                    {common_style}
+                    font-size: {fs + 2}px;
+                }}
+                QPushButton:hover {{
                     background-color: #0062a3;
-                }
-                QPushButton:pressed {
+                }}
+                QPushButton:pressed {{
                     background-color: #005a92;
-                }
-                QPushButton:disabled {
+                }}
+                QPushButton:disabled {{
                     background-color: #333333;
                     color: #666666;
-                }
+                }}
             """)
-            self.refreshModelButton.setStyleSheet("""
-                QPushButton {
+            self.refreshModelButton.setStyleSheet(f"""
+                QPushButton {{
                     background-color: #3c3c3c;
                     color: #cccccc;
                     border: 1px solid #3c3c3c;
                     border-radius: 4px;
-                    font-size: 14px;
-                }
-                QPushButton:hover {
+                    {common_style}
+                }}
+                QPushButton:hover {{
                     background-color: #4d4d4d;
                     border: 1px solid #007acc;
-                }
+                }}
             """)
         else:
-            self.modelSelector.setStyleSheet("""
-                QComboBox {
+            self.modelSelector.setStyleSheet(f"""
+                QComboBox {{
                     border: 1px solid #cccccc;
                     border-radius: 4px;
                     padding: 4px 10px;
                     background-color: #ffffff;
                     color: #333333;
                     min-height: 24px;
-                    font-size: 12px;
-                }
-                QComboBox::drop-down {
+                    {common_style}
+                    font-size: {fs - 2}px;
+                }}
+                QComboBox::drop-down {{
                     subcontrol-origin: padding;
                     subcontrol-position: top right;
                     width: 20px;
                     border-left: none;
-                }
-                QComboBox::down-arrow {
+                }}
+                QComboBox::down-arrow {{
                     image: none;
                     border-left: 4px solid transparent;
                     border-right: 4px solid transparent;
                     border-top: 5px solid #666666;
-                }
-                QComboBox QAbstractItemView {
+                }}
+                QComboBox QAbstractItemView {{
                     background-color: #ffffff;
                     color: #333333;
                     border: 1px solid #cccccc;
                     selection-background-color: #0078d4;
                     selection-color: #ffffff;
                     outline: 0px;
-                }
+                    {common_style}
+                    font-size: {fs - 2}px;
+                }}
             """)
-            self.chatWindow.setStyleSheet("border: 1px solid #dddddd; border-radius: 4px; background-color: #ffffff;")
+            self.chatWindow.setStyleSheet(f"border: 1px solid #dddddd; border-radius: 4px; background-color: #ffffff;")
             self.chatHistoryWidget.setStyleSheet("background-color: #ffffff;")
-            self.promptWindow.setStyleSheet("""
-                QTextEdit {
+            self.promptWindow.setStyleSheet(f"""
+                QTextEdit {{
                     border: 1px solid #cccccc;
                     border-radius: 4px;
                     padding: 8px 40px 8px 10px;
                     background-color: #f5f5f5;
                     color: #333333;
-                    font-size: 13px;
-                }
-                QTextEdit:focus {
+                    {common_style}
+                    font-size: {fs - 1}px;
+                }}
+                QTextEdit:focus {{
                     border: 1px solid #0078d4;
-                }
+                }}
             """)
-            self.promptEnterButton.setStyleSheet("""
-                QPushButton {
+            self.promptEnterButton.setStyleSheet(f"""
+                QPushButton {{
                     background-color: #0078d4;
                     color: white;
                     border-radius: 4px;
-                    font-size: 16px;
                     font-weight: bold;
                     border: none;
-                }
-                QPushButton:hover {
+                    {common_style}
+                    font-size: {fs + 2}px;
+                }}
+                QPushButton:hover {{
                     background-color: #0062a3;
-                }
-                QPushButton:pressed {
+                }}
+                QPushButton:pressed {{
                     background-color: #005a92;
-                }
-                QPushButton:disabled {
+                }}
+                QPushButton:disabled {{
                     background-color: #eeeeee;
                     color: #999999;
-                }
+                }}
             """)
-            self.refreshModelButton.setStyleSheet("""
-                QPushButton {
+            self.refreshModelButton.setStyleSheet(f"""
+                QPushButton {{
                     background-color: #ffffff;
                     color: #333333;
                     border: 1px solid #cccccc;
                     border-radius: 4px;
-                    font-size: 14px;
-                }
-                QPushButton:hover {
+                    {common_style}
+                }}
+                QPushButton:hover {{
                     background-color: #f5f5f5;
                     border: 1px solid #0078d4;
-                }
+                }}
             """)
-        
-        # Обновляем стиль существующих баблов
-        for i in range(self.chatHistoryLayout.count()):
-            item = self.chatHistoryLayout.itemAt(i)
-            widget = item.widget()
-            if isinstance(widget, MessageBubble):
-                is_user = widget.header.text() == "Вы"
-                widget.update_style(is_user, is_dark)
     
     
 

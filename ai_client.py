@@ -52,12 +52,23 @@ class RAGManager:
         else:
             self.vector_store.add_documents(documents)
 
-    def search(self, query, k=4):
-        """Поиск наиболее релевантных фрагментов."""
+    def search(self, query, k=4, page_numbers=None):
+        """Поиск наиболее релевантных фрагментов с опциональной фильтрацией по страницам."""
         if self.vector_store is None:
             return []
         
-        docs = self.vector_store.similarity_search(query, k=k)
+        filter_dict = None
+        if page_numbers:
+            # Преобразуем список страниц (1-based) в 0-based для метаданных
+            zero_based_pages = [p - 1 for p in page_numbers]
+            if len(zero_based_pages) == 1:
+                filter_dict = {"page": zero_based_pages[0]}
+            else:
+                # FAISS filter в langchain поддерживает callable или dict
+                # Для нескольких значений используем lambda
+                filter_dict = lambda metadata: metadata.get("page") in zero_based_pages
+
+        docs = self.vector_store.similarity_search(query, k=k, filter=filter_dict)
         return docs
 
     def clear(self):
