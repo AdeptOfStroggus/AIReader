@@ -1,6 +1,6 @@
 from PySide6.QtWidgets import QTextEdit, QVBoxLayout, QWidget, QPushButton, QHBoxLayout, QLabel, QGridLayout, QLineEdit, QProgressBar, QComboBox
 from PySide6.QtCore import Qt, Signal, QSize, QPointF, QThread, Slot, QPropertyAnimation, QEasingCurve
-from PySide6.QtGui import QPixmap, QImage, QPainter, QColor
+from PySide6.QtGui import QPixmap, QImage, QPainter, QColor, QPalette
 from PySide6.QtPdf import QPdfDocument, QPdfLink
 from PySide6.QtPdfWidgets import QPdfView
 from doc_converter import Converter
@@ -247,6 +247,7 @@ class ReaderPanel(QWidget):
         self.activeWorkers = {}  # pageIndex: PageConverterWorker
         self.workerQueue = []    # Очередь индексов страниц для конвертации
         self.pendingQueueUpdate = False # Флаг отложенного обновления очереди
+        self._pendingHighlight = "" # Текст, который нужно выделить после загрузки страницы
         self.maxConcurrentWorkers = 1 # Ограничиваем одним потоком, так как Docling очень тяжелый
         self.isDarkMode = True
 
@@ -414,6 +415,11 @@ class ReaderPanel(QWidget):
             self.convertedTextView.setHtml(text)
             self.loadingBar.hide()
             
+            # Проверяем, есть ли отложенное выделение
+            if self._pendingHighlight:
+                self._HighlightSnippet(self._pendingHighlight)
+                self._pendingHighlight = ""
+            
         # Если есть отложенное обновление очереди, выполняем его сейчас
         if self.pendingQueueUpdate:
             self.pendingQueueUpdate = False
@@ -442,6 +448,12 @@ class ReaderPanel(QWidget):
         else:
             self.loadingBar.hide()
             self.convertedTextView.setHtml(self.convertedPagesCache[pageIndex])
+            
+            # Проверяем, есть ли отложенное выделение
+            if self._pendingHighlight:
+                self._HighlightSnippet(self._pendingHighlight)
+                self._pendingHighlight = ""
+                
             # Даже если страница в кэше, обновляем очередь (или откладываем обновление)
             if self.activeWorkers:
                 self.pendingQueueUpdate = True
@@ -472,6 +484,54 @@ class ReaderPanel(QWidget):
             self.pdfWindow.pageNavigator().jump(self.currentPage,QPointF(0,0),1.0)
             self.setPagesCount(self.currentPage)
 
+    def JumpToSource(self, pageIndex, snippet):
+        """Переходит на страницу и выделяет текст."""
+        if pageIndex < 0 or pageIndex >= self.maxPages:
+            return
+            
+        # Запоминаем, что нужно выделить
+        self._pendingHighlight = snippet
+
+        # Если мы уже на этой странице
+        if self.currentPage == pageIndex:
+            # На текущей странице LoadConvertedPage не сработает полностью как нужно для перерисовки, 
+            # поэтому вызываем напрямую
+            self._HighlightSnippet(snippet)
+            self._pendingHighlight = ""
+        else:
+            # Переходим на страницу
+            self.currentPage = pageIndex
+            self.LoadConvertedPage(self.currentPage)
+            self.pdfWindow.pageNavigator().jump(self.currentPage, QPointF(0, 0), 1.0)
+            self.setPagesCount(self.currentPage)
+        
+        # Переключаемся в текстовый режим, если нужно
+        if self.originalMode:
+            self.SwitchModes()
+
+    def _HighlightSnippet(self, snippet):
+        """Внутренний метод для поиска и выделения текста."""
+        if not snippet:
+            return
+            
+        # Очищаем старые выделения
+        self.convertedTextView.setExtraSelections([])
+        
+        # Ищем текст
+        cursor = self.convertedTextView.document().find(snippet)
+        if not cursor.isNull():
+            # Нашли! Выделяем
+            from PySide6.QtWidgets import QTextEdit
+            selection = QTextEdit.ExtraSelection()
+            selection.format.setBackground(QColor("#cc9900")) # Темно-желтый для выделения
+            selection.format.setForeground(QColor("white"))
+            selection.cursor = cursor
+            self.convertedTextView.setExtraSelections([selection])
+            
+            # Прокручиваем к выделению
+            self.convertedTextView.setTextCursor(cursor)
+            self.convertedTextView.ensureCursorVisible()
+
     def SetDarkMode(self, is_dark, fs=14):
         self.isDarkMode = is_dark
         common_style = f"font-size: {fs}px;"
@@ -488,6 +548,12 @@ class ReaderPanel(QWidget):
                     {common_style}
                 }}
             """)
+            
+            # Установка цвета ссылок через палитру
+            palette = self.convertedTextView.palette()
+            palette.setColor(QPalette.ColorRole.Link, QColor("#bb86fc"))
+            palette.setColor(QPalette.ColorRole.LinkVisited, QColor("#bb86fc"))
+            self.convertedTextView.setPalette(palette)
             self.navigationOverlay.setStyleSheet(f"""
                 QWidget {{
                     background-color: rgba(37, 37, 38, 220);
@@ -589,6 +655,12 @@ class ReaderPanel(QWidget):
                     {common_style}
                 }}
             """)
+            
+            # Установка цвета ссылок через палитру
+            palette = self.convertedTextView.palette()
+            palette.setColor(QPalette.ColorRole.Link, QColor("#005a92"))
+            palette.setColor(QPalette.ColorRole.LinkVisited, QColor("#005a92"))
+            self.convertedTextView.setPalette(palette)
             self.navigationOverlay.setStyleSheet(f"""
                 QWidget {{
                     background-color: rgba(255, 255, 255, 220);

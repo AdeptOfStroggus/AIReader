@@ -4,16 +4,36 @@ import sys
 import os
 
 # Подавляем предупреждения Qt о шрифтах и OpenType (засоряют терминал)
-os.environ["QT_LOGGING_RULES"] = "qt.text.font.db=false"
+os.environ["QT_LOGGING_RULES"] = "qt.text.font.db=false;qt.text.font=false;qt.gui.fontdatabase=false"
 
 from ui.aiAssistant_ui import AIAssistantPanel
-from PySide6.QtCore import QRunnable, QThreadPool, QTimer, Slot, Qt, QThread, Signal
+from PySide6.QtCore import QRunnable, QThreadPool, QTimer, Slot, Qt, QThread, Signal, qInstallMessageHandler, QtMsgType
 # ...
 from ui.readerPanel import ReaderPanel
 from PySide6.QtGui import QAction, QFont, QFontDatabase, QKeySequence
 from doc_converter import Converter
 from PySide6.QtWidgets import QFileDialog
 
+def qt_message_handler(mode, context, message):
+    """Фильтр для подавления специфических предупреждений Qt."""
+    # Подавляем только раздражающие предупреждения о шрифтах
+    if "setPointSize" in message and "Point size <= 0" in message:
+        return
+    if "OpenType support missing" in message:
+        return
+    
+    # Стандартный вывод для остальных сообщений через стандартный поток
+    if mode == QtMsgType.QtDebugMsg:
+        sys.stdout.write(f"Debug: {message}\n")
+    elif mode == QtMsgType.QtWarningMsg:
+        sys.stderr.write(f"Warning: {message}\n")
+    elif mode == QtMsgType.QtCriticalMsg:
+        sys.stderr.write(f"Critical: {message}\n")
+    elif mode == QtMsgType.QtFatalMsg:
+        sys.stderr.write(f"Fatal: {message}\n")
+        sys.exit(1)
+    elif mode == QtMsgType.QtInfoMsg:
+        sys.stdout.write(f"Info: {message}\n")
 
 def get_preferred_font_family():
     for family in QFontDatabase.families():
@@ -36,6 +56,9 @@ class MainApp(QMainWindow):
         # Если клиент не передан сразу, создадим его позже или будем ждать
         self.readerPanel = ReaderPanel(self.docConverter, self.client)
         self.AIPanel = AIAssistantPanel(self.client, self.readerPanel.GetConvertedText)
+        
+        # Соединяем нажатие на источник в чате с переходом в книге
+        self.AIPanel.sourceClicked.connect(self.readerPanel.JumpToSource)
 
         # Создаем сплиттер для разделения книги и чата
         self.splitter = QSplitter(Qt.Horizontal)
@@ -82,6 +105,23 @@ class MainApp(QMainWindow):
         self.themeAction = QAction("&Светлая тема", self)
         self.themeAction.triggered.connect(self.ToggleTheme)
         self.ViewMenu.addAction(self.themeAction)
+
+        # Меню настроек OCR (Шестеренка)
+        self.ocrMenu = self.menuBar().addMenu("⚙️")
+        
+        # Заглушки для настроек OCR
+        ocrLanguageAction = QAction("Язык распознавания (OCR)", self)
+        self.ocrMenu.addAction(ocrLanguageAction)
+        
+        ocrEngineAction = QAction("Движок OCR", self)
+        self.ocrMenu.addAction(ocrEngineAction)
+        
+        self.ocrMenu.addSeparator()
+        
+        ocrHighQualityAction = QAction("Высокое качество (медленно)", self)
+        ocrHighQualityAction.setCheckable(True)
+        ocrHighQualityAction.setChecked(True)
+        self.ocrMenu.addAction(ocrHighQualityAction)
 
         self.fontSizeSpinBox = QSpinBox()
         self.fontSizeSpinBox.setRange(8, 72)
@@ -310,6 +350,9 @@ class MainApp(QMainWindow):
 
 def main():
     """Точка входа в приложение."""
+    # Устанавливаем кастомный обработчик сообщений Qt в самом начале
+    qInstallMessageHandler(qt_message_handler)
+    
     app = QApplication(sys.argv)
 
     # Путь к шрифтам теперь внутри папки ui
@@ -322,16 +365,9 @@ def main():
                 QFontDatabase.addApplicationFont(font_path)
 
     font_family = get_preferred_font_family()
-    if not font_family:
-        system_font = app.font()
-    else:
-        system_font = QFont(font_family)
-    
-    # Чтобы избежать предупреждений при переходе с pixelSize (если pointSize == -1)
-    if system_font.pointSize() <= 0:
-        system_font.setPointSizeF(14.0)
-    else:
-        system_font.setPointSize(14)
+    # Создаем новый объект шрифта, чтобы избежать проблем с инициализацией системного шрифта
+    system_font = QFont(font_family) if font_family else QFont()
+    system_font.setPointSize(14)
     app.setFont(system_font)
 
     window = MainApp()

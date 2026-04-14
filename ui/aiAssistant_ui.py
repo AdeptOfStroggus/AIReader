@@ -13,14 +13,17 @@ from PySide6.QtWidgets import (
     QSizePolicy
 )
 from PySide6.QtCore import Qt, Signal
-from PySide6.QtGui import QColor, QFont
+from PySide6.QtGui import QColor, QFont, QPalette
 from ai_client import AIClient
 import asyncio
 import re
+from urllib.parse import unquote
 from PySide6.QtCore import QRunnable, QThreadPool, QTimer, Slot, QThread, Signal, Qt
 
 class MessageBubble(QWidget):
     """Виджет отдельного сообщения в стиле мессенджера."""
+    sourceClicked = Signal(int, str)
+
     def __init__(self, sender, message, is_user, is_dark):
         super().__init__()
         main_layout = QVBoxLayout(self)
@@ -34,7 +37,8 @@ class MessageBubble(QWidget):
         # Тело сообщения (бабл)
         self.bubble = QLabel(message)
         self.bubble.setWordWrap(True)
-        self.bubble.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        self.bubble.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse | Qt.TextInteractionFlag.LinksAccessibleByMouse)
+        self.bubble.linkActivated.connect(self.OnLinkActivated)
         # Ограничиваем ширину бабла (примерно 80% от ширины панели)
         self.bubble.setMaximumWidth(350) 
         
@@ -57,20 +61,41 @@ class MessageBubble(QWidget):
             main_layout.addLayout(bubble_container)
             self.header.setContentsMargins(10, 0, 0, 0)
 
+    def OnLinkActivated(self, link):
+        """Обработка нажатия на ссылку вида source://page=5&text=фрагмент"""
+        if link.startswith("source://"):
+            try:
+                # Извлекаем параметры из ссылки
+                params = link[len("source://"):].split("&")
+                page = 0
+                text = ""
+                for p in params:
+                    if p.startswith("page="):
+                        page = int(p.split("=")[1]) - 1 # Переводим в 0-based
+                    elif p.startswith("text="):
+                        text = unquote(p.split("=")[1])
+                
+                self.sourceClicked.emit(page, text)
+            except Exception as e:
+                print(f"Ошибка при обработке ссылки: {e}")
+
     def update_style(self, is_user, is_dark, fs=13):
         if is_user:
             bg_color = "#007acc"
             text_color = "white"
+            link_color = "#e0e0e0" # Светло-серый для ссылок на синем фоне
             radius = "12px 12px 2px 12px"
             border = "none"
         else:
             if is_dark:
                 bg_color = "#2d2d2d"
                 text_color = "#d4d4d4"
+                link_color = "#E548DD" # Светло-фиолетовый для темной темы
                 border = "1px solid #3c3c3c"
             else:
                 bg_color = "#f1f1f1"
                 text_color = "#333333"
+                link_color = "#005a92" # Темно-синий для светлой темы
                 border = "1px solid #e0e0e0"
             radius = "12px 12px 12px 2px"
             
@@ -81,6 +106,75 @@ class MessageBubble(QWidget):
                 border-radius: 12px;
                 border: {border};
                 padding: 8px 12px;
+                font-size: {fs}px;
+                font-weight: bold;
+            }}
+        """)
+        
+        # Установка цвета ссылок через палитру (т.к. QLabel не поддерживает CSS селектор 'a')
+        palette = self.bubble.palette()
+        palette.setColor(QPalette.ColorRole.Link, QColor(link_color))
+        palette.setColor(QPalette.ColorRole.LinkVisited, QColor(link_color))
+        self.bubble.setPalette(palette)
+        self.header.setStyleSheet(f"color: #888888; font-size: {fs - 3}px; font-weight: bold;")
+
+class LoadingBubble(QWidget):
+    """Виджет индикатора загрузки (анимация трех точек)."""
+    def __init__(self, is_dark):
+        super().__init__()
+        main_layout = QVBoxLayout(self)
+        main_layout.setContentsMargins(0, 5, 0, 5)
+        main_layout.setSpacing(2)
+        
+        # Контейнер для выравнивания по горизонтали (всегда слева для ИИ)
+        bubble_container = QHBoxLayout()
+        bubble_container.setContentsMargins(0, 0, 0, 0)
+        
+        # Тело сообщения (бабл)
+        self.bubble = QLabel("печатает .")
+        self.bubble.setFixedSize(100, 35)
+        self.bubble.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        
+        # Заголовок
+        self.header = QLabel("ИИ")
+        self.header.setStyleSheet("color: #888888; font-size: 10px; font-weight: bold;")
+        self.header.setContentsMargins(10, 0, 0, 0)
+        
+        self.update_style(is_dark)
+        
+        bubble_container.addWidget(self.bubble)
+        bubble_container.addStretch(1)
+        
+        main_layout.addWidget(self.header, 0, Qt.AlignmentFlag.AlignLeft)
+        main_layout.addLayout(bubble_container)
+
+        # Анимация точек
+        self.dot_count = 1
+        self.timer = QTimer(self)
+        self.timer.timeout.connect(self.animate)
+        self.timer.start(500)
+
+    def animate(self):
+        self.dot_count = (self.dot_count % 3) + 1
+        self.bubble.setText("печатает " + "." * self.dot_count)
+
+    def update_style(self, is_dark, fs=13):
+        if is_dark:
+            bg_color = "#2d2d2d"
+            text_color = "#d4d4d4"
+            border = "1px solid #3c3c3c"
+        else:
+            bg_color = "#f1f1f1"
+            text_color = "#333333"
+            border = "1px solid #e0e0e0"
+            
+        self.bubble.setStyleSheet(f"""
+            QLabel {{
+                background-color: {bg_color};
+                color: {text_color};
+                border-radius: 12px;
+                border: {border};
+                padding: 5px 10px;
                 font-size: {fs}px;
                 font-weight: bold;
             }}
@@ -167,6 +261,8 @@ class GetResponceWorker(QThread):
         self.completed.emit(resp)
 
 class AIAssistantPanel(QWidget):
+    sourceClicked = Signal(int, str)
+
     def __init__(self, client: AIClient, readmethod, parent=None, ):
         super().__init__(parent)
 
@@ -177,6 +273,7 @@ class AIAssistantPanel(QWidget):
         self.promptWorker = None
         self.modelUpdateWorker = None
         self.isDarkMode = True
+        self.loadingBubble = None
 
         #Инициализация GUI
 
@@ -358,6 +455,7 @@ class AIAssistantPanel(QWidget):
 
     def StopAllWorkers(self):
         """Останавливает все активные воркеры перед закрытием приложения."""
+        self.HideLoadingAnimation()
         if self.promptWorker and self.promptWorker.isRunning():
             self.promptWorker.quit()
             self.promptWorker.wait()
@@ -393,11 +491,15 @@ class AIAssistantPanel(QWidget):
         self.AppendToChat("Вы", query)
         self.promptWindow.clear()
         
+        # Показываем анимацию загрузки
+        self.ShowLoadingAnimation()
+        
         text = self.readText()
         is_loading = (text == "Текст загружается, подождите...")
         rag_available = self.client.rag_manager.vector_store is not None
 
         if is_loading and not rag_available:
+            self.HideLoadingAnimation()
             self.AppendToChat("Система", "Текст страницы еще не готов и поиск по книге недоступен. Пожалуйста, подождите немного.")
             return
             
@@ -407,23 +509,49 @@ class AIAssistantPanel(QWidget):
         self.promptWorker.start()
 
     def OnResponceReceived(self, resp):
+        # Скрываем анимацию загрузки
+        self.HideLoadingAnimation()
         # Добавляем ответ ИИ в чат
         self.AppendToChat("ИИ", resp)
+
+    def ShowLoadingAnimation(self):
+        """Показывает анимацию 'ИИ думает'."""
+        if self.loadingBubble:
+            return
+        self.loadingBubble = LoadingBubble(self.isDarkMode)
+        if hasattr(self, 'currentFontSize'):
+            self.loadingBubble.update_style(self.isDarkMode, self.currentFontSize - 1)
+        self.chatHistoryLayout.addWidget(self.loadingBubble)
+        self.ScrollToBottom()
+
+    def HideLoadingAnimation(self):
+        """Удаляет анимацию загрузки."""
+        if self.loadingBubble:
+            self.chatHistoryLayout.removeWidget(self.loadingBubble)
+            self.loadingBubble.deleteLater()
+            self.loadingBubble = None
+
+    def ScrollToBottom(self):
+        """Прокручивает чат в самый низ."""
+        QTimer.singleShot(50, lambda: self.chatWindow.verticalScrollBar().setValue(
+            self.chatWindow.verticalScrollBar().maximum()
+        ))
 
     def AppendToChat(self, sender, message):
         is_user = (sender == "Вы")
         
         # Создаем виджет сообщения (бабл)
         bubble = MessageBubble(sender, message, is_user, self.isDarkMode)
+        # Подключаем сигнал нажатия на источник
+        bubble.sourceClicked.connect(self.sourceClicked.emit)
+        
         # Применяем текущий размер шрифта
         if hasattr(self, 'currentFontSize'):
             bubble.update_style(is_user, self.isDarkMode, self.currentFontSize - 1)
         self.chatHistoryLayout.addWidget(bubble)
         
         # Прокрутка вниз
-        QTimer.singleShot(50, lambda: self.chatWindow.verticalScrollBar().setValue(
-            self.chatWindow.verticalScrollBar().maximum()
-        ))
+        self.ScrollToBottom()
 
     def OnModelReceived(self, models_info):
         if isinstance(models_info, list):
@@ -483,6 +611,8 @@ class AIAssistantPanel(QWidget):
             if isinstance(widget, MessageBubble):
                 is_user = (widget.header.text() == "Вы")
                 widget.update_style(is_user, is_dark, fs - 1)
+            elif isinstance(widget, LoadingBubble):
+                widget.update_style(is_dark, fs - 1)
 
         if is_dark:
             self.modelSelector.setStyleSheet(f"""

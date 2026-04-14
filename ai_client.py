@@ -109,7 +109,13 @@ class AIClient():
                 messages=[
                     {
                         "role": "system",
-                        "content": "Ты - надёжный помощник в анализе различной литературы. Твоя задача - максимально подробно и точно изучить текст и выполнить задачу, которую дал пользователь. Ответ выдавай в HTML, и только ответ на задачу (не более). Не надо говорить 'этот HTML код выполняет то-то то-то' и такое прочее."
+                        "content": (
+                            "Ты - надёжный помощник в анализе различной литературы. Твоя задача - максимально подробно и точно изучить текст и выполнить задачу, которую дал пользователь.\n\n"
+                            "ОБЯЗАТЕЛЬНОЕ УСЛОВИЕ: Для каждого утверждения, которое ты берешь из предоставленного текста, ты ДОЛЖЕН указать источник. "
+                            "Используй для этого специальный HTML-тег: <a href=\"source://page=N&text=цитата\">[Стр. N]</a>, где N - номер страницы, а 'цитата' - короткий (3-5 слов) уникальный фрагмент текста из этой страницы, на который ты ссылаешься.\n\n"
+                            "Пример: 'Согласно исследованиям, климат меняется <a href=\"source://page=5&text=глобальное потепление наступает\">[Стр. 5]</a>.'\n\n"
+                            "Ответ выдавай в HTML, и только ответ на задачу (не более). Не надо говорить 'этот HTML код выполняет то-то то-то' и такое прочее."
+                        )
                     },
                     {
                         "role": "user",
@@ -180,7 +186,7 @@ class AIClient():
                 except Exception as e:
                     print(f"Ошибка при получении списка моделей из API: {e}")
 
-                # 3. Добавляем активные эндпоинты (Dedicated), только если они тоже являются Chat моделями
+                # 3. Добавляем активные эндпоинты (только Serverless), если они есть в списке чатовых моделей
                 try:
                     resp_endpoints = await client.get(f"{base_url}/endpoints", headers=headers)
                     if resp_endpoints.status_code == 200:
@@ -189,17 +195,17 @@ class AIClient():
                         
                         for e in items:
                             m_id = e.get('model')
-                            if m_id and m_id not in seen_ids:
+                            e_type = e.get('type')
+                            if m_id and m_id not in seen_ids and e_type == 'serverless':
                                 # Проверяем, является ли эта модель чатовой (из нашего списка)
                                 is_chat = m_id in serverless_chat_ids or \
                                          any((m_id.split('/')[-1] if '/' in m_id else m_id) == \
                                              (s.split('/')[-1] if '/' in s else s) for s in serverless_chat_ids)
                                 
                                 if is_chat:
-                                    e_type = e.get('type')
                                     models_info.append({
                                         "id": m_id,
-                                        "is_serverless": e_type == 'serverless',
+                                        "is_serverless": True,
                                         "is_recommended": m_id in self.RECOMMENDED_MODELS
                                     })
                                     seen_ids.add(m_id)
