@@ -138,7 +138,9 @@ class AIClient():
             # 1. Загружаем статический список Chat Serverless моделей из файла
             serverless_chat_ids = set()
             try:
-                with open(r"c:\Users\maxim\OneDrive\Documents\GitHub\AIReader\serverless-models.md", "r", encoding="utf-8") as f:
+                import os
+                file_path = os.path.join(os.path.dirname(__file__), "serverless-models.md")
+                with open(file_path, "r", encoding="utf-8") as f:
                     content = f.read()
                     
                     # Извлекаем только секцию "Chat models"
