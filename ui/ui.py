@@ -2,6 +2,10 @@ from PySide6.QtWidgets import QApplication, QWidget, QVBoxLayout, QHBoxLayout, Q
 from ai_client import AIClient
 import sys
 import os
+
+# Подавляем предупреждения Qt о шрифтах и OpenType (засоряют терминал)
+os.environ["QT_LOGGING_RULES"] = "qt.text.font.db=false"
+
 from ui.aiAssistant_ui import AIAssistantPanel
 from PySide6.QtCore import QRunnable, QThreadPool, QTimer, Slot, Qt, QThread, Signal
 # ...
@@ -11,10 +15,10 @@ from doc_converter import Converter
 from PySide6.QtWidgets import QFileDialog
 
 
-def get_dm_sans_family():
+def get_preferred_font_family():
     for family in QFontDatabase.families():
         normalized = family.replace(" ", "").lower()
-        if normalized.startswith("dmsans"):
+        if normalized.startswith("worksans") or normalized.startswith("dmsans"):
             return family
     return ""
         
@@ -27,13 +31,11 @@ class MainApp(QMainWindow):
         self.docConverter = Converter()
         self.isDarkMode = True
         self.globalFontSize = 14
+        self._initialized = False
 
         # Если клиент не передан сразу, создадим его позже или будем ждать
         self.readerPanel = ReaderPanel(self.docConverter, self.client)
         self.AIPanel = AIAssistantPanel(self.client, self.readerPanel.GetConvertedText)
-
-        # Применяем тему
-        self.ApplyTheme()
 
         # Создаем сплиттер для разделения книги и чата
         self.splitter = QSplitter(Qt.Horizontal)
@@ -58,6 +60,10 @@ class MainApp(QMainWindow):
         self.mainWidget.setLayout(self.box)
         self.setCentralWidget(self.mainWidget)
 
+        # Применяем тему (теперь после настройки всех виджетов и сплиттера)
+        self.ApplyTheme()
+        self._initialized = True
+
         menuBar = self.menuBar()
 
 
@@ -80,37 +86,48 @@ class MainApp(QMainWindow):
         self.fontSizeSpinBox = QSpinBox()
         self.fontSizeSpinBox.setRange(8, 72)
         self.fontSizeSpinBox.setValue(self.globalFontSize)
-        self.fontSizeSpinBox.valueChanged.connect(self.OnFontSizeChanged)
+        # self.fontSizeSpinBox.valueChanged.connect(self.OnFontSizeChanged)
 
         self.zoomInAction = QAction("Увеличить шрифт", self)
         self.zoomInAction.setShortcuts([QKeySequence.StandardKey.ZoomIn, QKeySequence("Ctrl+=")])
         self.zoomInAction.setShortcutContext(Qt.ShortcutContext.ApplicationShortcut)
         self.zoomInAction.triggered.connect(self.IncreaseFontSize)
-        self.ViewMenu.addAction(self.zoomInAction)
-        self.addAction(self.zoomInAction)
+        # self.ViewMenu.addAction(self.zoomInAction)
+        # self.addAction(self.zoomInAction)
 
         self.zoomOutAction = QAction("Уменьшить шрифт", self)
         self.zoomOutAction.setShortcuts([QKeySequence.StandardKey.ZoomOut, QKeySequence("Ctrl+-")])
         self.zoomOutAction.setShortcutContext(Qt.ShortcutContext.ApplicationShortcut)
         self.zoomOutAction.triggered.connect(self.DecreaseFontSize)
-        self.ViewMenu.addAction(self.zoomOutAction)
-        self.addAction(self.zoomOutAction)
+        # self.ViewMenu.addAction(self.zoomOutAction)
+        # self.addAction(self.zoomOutAction)
 
         self.resetFontAction = QAction("Сбросить размер шрифта", self)
         self.resetFontAction.setShortcutContext(Qt.ShortcutContext.ApplicationShortcut)
         self.resetFontAction.triggered.connect(lambda: self.fontSizeSpinBox.setValue(14))
-        self.ViewMenu.addAction(self.resetFontAction)
+        # self.ViewMenu.addAction(self.resetFontAction)
+
+        # from PySide6.QtWidgets import QWidgetAction
+        # font_panel = QWidget()
+        # font_layout = QHBoxLayout(font_panel)
+        # font_layout.setContentsMargins(10, 5, 10, 5)
+        # font_layout.addWidget(QLabel("Размер шрифта:"))
+        # font_layout.addWidget(self.fontSizeSpinBox)
+        
+        # font_action = QWidgetAction(self)
+        # font_action.setDefaultWidget(font_panel)
+        # self.ViewMenu.addAction(font_action)
 
         status_bar = self.statusBar()
         status_bar.setSizeGripEnabled(False)
-        status_bar.addPermanentWidget(QLabel("Размер шрифта:"))
-        status_bar.addPermanentWidget(self.fontSizeSpinBox)
+        # status_bar.addPermanentWidget(QLabel("Размер шрифта:"))
+        # status_bar.addPermanentWidget(self.fontSizeSpinBox)
 
     def IncreaseFontSize(self):
-        self.fontSizeSpinBox.setValue(min(self.fontSizeSpinBox.maximum(), self.globalFontSize + 1))
+        self.fontSizeSpinBox.setValue(min(self.fontSizeSpinBox.maximum(), self.fontSizeSpinBox.value() + 1))
 
     def DecreaseFontSize(self):
-        self.fontSizeSpinBox.setValue(max(self.fontSizeSpinBox.minimum(), self.globalFontSize - 1))
+        self.fontSizeSpinBox.setValue(max(self.fontSizeSpinBox.minimum(), self.fontSizeSpinBox.value() - 1))
 
     def OnFontSizeChanged(self, value):
         self.globalFontSize = value
@@ -122,6 +139,9 @@ class MainApp(QMainWindow):
         common_text_style = f"""
             font-size: {fs}px;
         """
+        
+        # Фиксируем размеры сплиттера перед сменой стилей (если он уже создан и инициализирован)
+        splitter_sizes = self.splitter.sizes() if hasattr(self, 'splitter') and self._initialized else None
         
         if self.isDarkMode:
             # VS Code Dark Theme
@@ -237,6 +257,10 @@ class MainApp(QMainWindow):
         self.readerPanel.SetDarkMode(self.isDarkMode, fs)
         self.AIPanel.SetDarkMode(self.isDarkMode, fs)
 
+        # Восстанавливаем размеры сплиттера, если они были сохранены и корректны
+        if hasattr(self, 'splitter') and splitter_sizes and sum(splitter_sizes) > 0:
+            self.splitter.setSizes(splitter_sizes)
+
     def SetClient(self, client):
         self.client = client
         self.readerPanel.aiClient = client
@@ -247,6 +271,23 @@ class MainApp(QMainWindow):
     def ToggleTheme(self):
         self.isDarkMode = not self.isDarkMode
         self.ApplyTheme()
+
+    def closeEvent(self, event):
+        """Обеспечиваем корректное завершение всех фоновых потоков при закрытии."""
+        # Останавливаем воркеры в панелях
+        if hasattr(self, 'readerPanel'):
+            self.readerPanel.StopAllWorkers()
+        
+        if hasattr(self, 'AIPanel'):
+            self.AIPanel.StopAllWorkers()
+            
+        # Ждем завершения инициализатора клиента, если он еще работает
+        global initializer
+        if 'initializer' in globals() and initializer.isRunning():
+            initializer.quit()
+            initializer.wait()
+            
+        event.accept()
 
     def SwitchModes(self):
         self.readerPanel.SwitchModes()
@@ -271,28 +312,26 @@ def main():
     """Точка входа в приложение."""
     app = QApplication(sys.argv)
 
-    base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    fonts_dir = os.path.join(base_dir, "fonts")
+    # Путь к шрифтам теперь внутри папки ui
+    fonts_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fonts")
 
     if os.path.exists(fonts_dir):
         for font_file in os.listdir(fonts_dir):
             if font_file.lower().endswith((".otf", ".ttf")):
                 font_path = os.path.join(fonts_dir, font_file)
-                font_id = QFontDatabase.addApplicationFont(font_path)
-                if font_id == -1:
-                    print(f"Ошибка загрузки шрифта: {font_path}")
-                else:
-                    families = QFontDatabase.applicationFontFamilies(font_id)
-                    print(f"Загружен шрифт: {families}")
+                QFontDatabase.addApplicationFont(font_path)
 
-    dm_sans_family = get_dm_sans_family()
-    if not dm_sans_family:
-        print("Внимание: DM Sans не найден, используется системный шрифт по умолчанию.")
+    font_family = get_preferred_font_family()
+    if not font_family:
         system_font = app.font()
     else:
-        print(f"Используется семейство шрифта: {dm_sans_family}")
-        system_font = QFont(dm_sans_family)
-    system_font.setPointSize(14)
+        system_font = QFont(font_family)
+    
+    # Чтобы избежать предупреждений при переходе с pixelSize (если pointSize == -1)
+    if system_font.pointSize() <= 0:
+        system_font.setPointSizeF(14.0)
+    else:
+        system_font.setPointSize(14)
     app.setFont(system_font)
 
     window = MainApp()

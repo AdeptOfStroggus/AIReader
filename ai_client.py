@@ -76,6 +76,15 @@ class RAGManager:
         self.vector_store = None
 
 class AIClient():
+    # Рекомендованные модели для задач AIReader
+    RECOMMENDED_MODELS = [
+        "meta-llama/Meta-Llama-3.1-70B-Instruct-Turbo",
+        "meta-llama/Meta-Llama-3.1-8B-Instruct-Turbo",
+        "Qwen/Qwen2.5-72B-Instruct-Turbo",
+        "deepseek-ai/DeepSeek-V3",
+        "deepseek-ai/DeepSeek-R1",
+    ]
+
     def __init__(self):
         from openai import AsyncOpenAI
         self.rag_manager = RAGManager()
@@ -114,59 +123,91 @@ class AIClient():
 
     async def GetModelsAsync(self):
         try:
-            """Выполняет асинхронный запрос к API для получения списка моделей с определением serverless типа через эндпоинты."""
+            """Выполняет асинхронный запрос к API для получения списка моделей."""
             import httpx
+            import re
             headers = {"Authorization": f"Bearer {self.openaiapijson.get('OPENAI_API_KEY', '')}"}
             base_url = self.openaiapijson.get('OPENAI_BASE_PATH', '').rstrip('/')
             
-            async with httpx.AsyncClient() as client:
-                # 1. Получаем список активных эндпоинтов (здесь точно указан тип serverless/dedicated)
-                resp_endpoints = await client.get(f"{base_url}/endpoints", headers=headers)
-                serverless_models_set = set()
-                if resp_endpoints.status_code == 200:
-                    endpoints_data = resp_endpoints.json()
-                    endpoints_list = []
-                    if isinstance(endpoints_data, list):
-                        endpoints_list = endpoints_data
-                    elif isinstance(endpoints_data, dict) and 'data' in endpoints_data:
-                        endpoints_list = endpoints_data['data']
+            # 1. Загружаем статический список Chat Serverless моделей из файла
+            serverless_chat_ids = set()
+            try:
+                with open(r"c:\Users\maxim\OneDrive\Documents\GitHub\AIReader\serverless-models.md", "r", encoding="utf-8") as f:
+                    content = f.read()
                     
-                    for e in endpoints_list:
-                        if e.get('type') == 'serverless':
-                            model_name = e.get('model')
-                            if model_name:
-                                serverless_models_set.add(model_name)
+                    # Извлекаем только секцию "Chat models"
+                    chat_section_match = re.search(r'## Chat models(.*?)(?:##|$)', content, re.DOTALL)
+                    if chat_section_match:
+                        chat_content = chat_section_match.group(1)
+                        # Ищем строки в таблицах: | Organization | Model Name | API Model String | ...
+                        # Паттерн ищет третью колонку в строках, начинающихся с '|'
+                        matches = re.findall(r'^\|\s*[^|]+\s*\|\s*[^|]+\s*\|\s*([^|\s]+)\s*\|', chat_content, re.MULTILINE)
+                        for m_id in matches:
+                            if m_id and m_id not in ("API", "Model", "---") and '/' in m_id:
+                                serverless_chat_ids.add(m_id)
+            except Exception as e:
+                print(f"Ошибка при чтении serverless-models.md: {e}")
 
-                # 2. Получаем полный список моделей библиотеки
-                resp_models = await client.get(f"{base_url}/models", headers=headers)
-                models_data = resp_models.json()
-                
+            async with httpx.AsyncClient() as client:
                 models_info = []
-                items = []
-                if isinstance(models_data, list):
-                    items = models_data
-                elif isinstance(models_data, dict) and 'data' in models_data:
-                    items = models_data['data']
-                
-                for m in items:
-                    if 'id' in m:
-                        m_id = m['id']
-                        # Модель считается serverless, если она есть в списке активных serverless эндпоинтов
-                        # Или если у неё есть цена за токены (подстраховка)
-                        is_serverless = m_id in serverless_models_set
-                        
-                        if not is_serverless:
-                            pricing = m.get('pricing', {})
-                            if pricing and (pricing.get('input', 0) > 0 or pricing.get('output', 0) > 0):
-                                is_serverless = True
-                        
-                        models_info.append({
-                            "id": m_id,
-                            "is_serverless": is_serverless
-                        })
+                seen_ids = set()
 
-                # Сортировка по ID
-                models_info.sort(key=lambda x: x['id'])
+                # 2. Получаем список моделей из API и фильтруем только те, что есть в списке Chat
+                try:
+                    resp_models = await client.get(f"{base_url}/models", headers=headers)
+                    if resp_models.status_code == 200:
+                        models_data = resp_models.json()
+                        items = models_data if isinstance(models_data, list) else models_data.get('data', [])
+                        
+                        for m in items:
+                            m_id = m.get('id')
+                            if not m_id: continue
+                            
+                            # Фильтруем: оставляем только те, что есть в списке Chat моделей из MD файла
+                            # Проверяем как полное совпадение, так и по короткому имени
+                            is_in_chat_list = m_id in serverless_chat_ids
+                            if not is_in_chat_list:
+                                short_id = m_id.split('/')[-1] if '/' in m_id else m_id
+                                is_in_chat_list = any(short_id == (s.split('/')[-1] if '/' in s else s) for s in serverless_chat_ids)
+                            
+                            if is_in_chat_list:
+                                seen_ids.add(m_id)
+                                models_info.append({
+                                    "id": m_id,
+                                    "is_serverless": True, # Все модели из этого списка - serverless
+                                    "is_recommended": m_id in self.RECOMMENDED_MODELS
+                                })
+                except Exception as e:
+                    print(f"Ошибка при получении списка моделей из API: {e}")
+
+                # 3. Добавляем активные эндпоинты (Dedicated), только если они тоже являются Chat моделями
+                try:
+                    resp_endpoints = await client.get(f"{base_url}/endpoints", headers=headers)
+                    if resp_endpoints.status_code == 200:
+                        endpoints_data = resp_endpoints.json()
+                        items = endpoints_data if isinstance(endpoints_data, list) else endpoints_data.get('data', [])
+                        
+                        for e in items:
+                            m_id = e.get('model')
+                            if m_id and m_id not in seen_ids:
+                                # Проверяем, является ли эта модель чатовой (из нашего списка)
+                                is_chat = m_id in serverless_chat_ids or \
+                                         any((m_id.split('/')[-1] if '/' in m_id else m_id) == \
+                                             (s.split('/')[-1] if '/' in s else s) for s in serverless_chat_ids)
+                                
+                                if is_chat:
+                                    e_type = e.get('type')
+                                    models_info.append({
+                                        "id": m_id,
+                                        "is_serverless": e_type == 'serverless',
+                                        "is_recommended": m_id in self.RECOMMENDED_MODELS
+                                    })
+                                    seen_ids.add(m_id)
+                except Exception as e:
+                    print(f"Предупреждение: Не удалось получить список эндпоинтов: {e}")
+
+                # Сортировка: сначала рекомендованные, затем по ID
+                models_info.sort(key=lambda x: (not x['is_recommended'], x['id']))
                 self.modelListID = [m['id'] for m in models_info]
                 return models_info
         except Exception as e:

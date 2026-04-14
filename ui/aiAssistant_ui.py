@@ -82,6 +82,7 @@ class MessageBubble(QWidget):
                 border: {border};
                 padding: 8px 12px;
                 font-size: {fs}px;
+                font-weight: bold;
             }}
         """)
         self.header.setStyleSheet(f"color: #888888; font-size: {fs - 3}px; font-weight: bold;")
@@ -325,6 +326,9 @@ class AIAssistantPanel(QWidget):
         self.modelHeaderLayout.addWidget(self.modelSelector, 1)
         self.modelHeaderLayout.addWidget(self.refreshModelButton)
 
+        # Подключаем сигнал изменения модели
+        self.modelSelector.currentIndexChanged.connect(self.OnModelIndexChanged)
+
         #Основной layout панели
         self.box = QVBoxLayout()
         self.box.setContentsMargins(15, 15, 15, 15)
@@ -351,6 +355,16 @@ class AIAssistantPanel(QWidget):
                         self.OnPromptEnderButtonClicked()
                         return True
         return super().eventFilter(obj, event)
+
+    def StopAllWorkers(self):
+        """Останавливает все активные воркеры перед закрытием приложения."""
+        if self.promptWorker and self.promptWorker.isRunning():
+            self.promptWorker.quit()
+            self.promptWorker.wait()
+        
+        if self.modelUpdateWorker and self.modelUpdateWorker.isRunning():
+            self.modelUpdateWorker.quit()
+            self.modelUpdateWorker.wait()
 
     def OnRefreshModelButtonClicked(self):
         if not self.client:
@@ -424,15 +438,35 @@ class AIAssistantPanel(QWidget):
         for model in models_info:
             m_id = model.get('id', 'Unknown')
             is_serverless = model.get('is_serverless', False)
+            is_recommended = model.get('is_recommended', False)
             
             # Сохраняем оригинальный ID в UserRole для корректной работы API
             self.modelSelector.addItem(m_id, userData=m_id)
             index = self.modelSelector.count() - 1
             
-            # Если модель serverless, красим её в зеленый цвет и добавляем метку
-            if is_serverless:
+            display_text = m_id
+            
+            # Если модель рекомендованная, добавляем звезду и красим в золотой
+            if is_recommended:
+                display_text = f"★ {display_text}"
+                self.modelSelector.setItemData(index, QColor("#ffd700"), Qt.ItemDataRole.ForegroundRole) # Gold
+            # Если модель serverless, красим её в бирюзовый (если не рекомендованная)
+            elif is_serverless:
                 self.modelSelector.setItemData(index, QColor("#4ec9b0"), Qt.ItemDataRole.ForegroundRole)
-                self.modelSelector.setItemText(index, f"{m_id} (Serverless)")
+            
+            if is_serverless:
+                display_text = f"{display_text} (Serverless)"
+                
+            self.modelSelector.setItemText(index, display_text)
+            
+        # Устанавливаем первую модель (она будет самой подходящей из рекомендованных)
+        if self.modelSelector.count() > 0:
+            self.modelSelector.setCurrentIndex(0)
+            self.client.SetCurrentModelID(0)
+
+    def OnModelIndexChanged(self, index):
+        if self.client and index >= 0:
+            self.client.SetCurrentModelID(index)
 
     def GetSelectedModel(self):
         # Возвращаем оригинальный ID из userData

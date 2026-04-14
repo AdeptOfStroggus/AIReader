@@ -306,8 +306,8 @@ class ReaderPanel(QWidget):
         self.pendingQueueUpdate = False
         self.aiClient.rag_manager.clear() # Очищаем FAISS индекс
 
-        print(self.convertedPagesCache)
-        #self.LoadConvertedPage(0)
+        # print(self.convertedPagesCache)
+        # self.LoadConvertedPage(0)
         self.SetPdfPage(0)
 
         self.currentPage=0
@@ -682,6 +682,15 @@ class ReaderPanel(QWidget):
 
     def setPagesCount(self, current_page: int = 1):
         self.pagesLabel.setText(f"{current_page+1} из {self.maxPages}")
+
+    def StopAllWorkers(self):
+        """Останавливает все активные воркеры перед закрытием приложения."""
+        for pageIndex, worker in list(self.activeWorkers.items()):
+            if worker.isRunning():
+                worker.quit()
+                worker.wait()
+        self.activeWorkers.clear()
+        self.workerQueue.clear()
 
     def JumpTOPage(self):
         try:
