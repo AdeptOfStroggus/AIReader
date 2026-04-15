@@ -9,10 +9,13 @@ class Converter:
     @property
     def converter(self):
         if self._converter is None:
-            from docling.document_converter import DocumentConverter, PdfFormatOption
+            from docling.document_converter import DocumentConverter, PdfFormatOption, ImageFormatOption
             from docling.datamodel.accelerator_options import AcceleratorDevice, AcceleratorOptions
             from docling.datamodel.base_models import InputFormat
             from docling.datamodel.pipeline_options import PdfPipelineOptions, EasyOcrOptions
+            from docling.pipeline.vlm_pipeline import VlmPipeline
+            from docling_core.types.doc.base import ImageRefMode
+
 
             # Configure accelerator options for GPU
             accelerator_options = AcceleratorOptions(
@@ -29,6 +32,11 @@ class Converter:
             # Формулы замедляют процесс
             pipeline_options.do_formula_enrichment = True
             pipeline_options.do_code_enrichment = True
+
+            pipeline_options.generate_picture_images = True
+            pipeline_options.generate_table_images = True
+            pipeline_options.generate_page_images = True
+
             # Apply options to converter
             self._converter = DocumentConverter(
                 format_options={
@@ -50,6 +58,8 @@ class Converter:
 
         result = str()
         if(numOfPages + offset <= number_of_pages ):
+
+            from docling_core.types.doc.base import ImageRefMode
             for i in range(numOfPages):
                 page = reader.pages[i + offset]
 
@@ -61,6 +71,7 @@ class Converter:
                     writer.add_page(page)
                     writer.write(tmp_path)
 
+                    #image_mode=ImageRefMode.EMBEDDED
                     result += self.converter.convert(tmp_path).document.export_to_html()
                     
                     # Удаляем временный файл после конвертации
