@@ -3,13 +3,18 @@ name = "aireader"
 version = "0.1.0"
 description = "Add your description here"
 readme = "README.md"
-requires-python = ">=3.11"
+requires-python = ">=3.11,<3.13"
 dependencies = [
     "docling>=2.86.0",
     "easyocr>=1.7.2",
+    "faiss-cpu>=1.13.2",
     "httpx>=0.28.1",
+    "langchain>=1.2.15",
+    "langchain-community>=0.4.1",
+    "langchain-huggingface>=1.2.1",
     "openai>=2.31.0",
     "pydantic>=2.12.5",
     "pypdf>=6.10.0",
     "pyside6>=6.11.0",
+    "sentence-transformers>=5.4.0",
 ]
