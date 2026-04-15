@@ -402,6 +402,25 @@ class AIAssistantPanel(QWidget):
             }
         """)
 
+        #Кнопка сброса чата
+        self.clearChatButton = QPushButton()
+        self.clearChatButton.clicked.connect(self.OnClearChatButtonClicked)
+        self.clearChatButton.setText("🗑")
+        self.clearChatButton.setFixedSize(30, 30)
+        self.clearChatButton.setStyleSheet("""
+            QPushButton {
+                background-color: #3c3c3c;
+                color: #cccccc;
+                border: 1px solid #3c3c3c;
+                border-radius: 4px;
+                font-size: 14px;
+            }
+            QPushButton:hover {
+                background-color: #4d4d4d;
+                border: 1px solid #007acc;
+            }
+        """)
+
 
         #Инициализация окна с промптами
         self.chatLayoutWidget = QWidget()
@@ -422,6 +441,7 @@ class AIAssistantPanel(QWidget):
         self.modelHeaderLayout.setSpacing(8)
         self.modelHeaderLayout.addWidget(self.modelSelector, 1)
         self.modelHeaderLayout.addWidget(self.refreshModelButton)
+        self.modelHeaderLayout.addWidget(self.clearChatButton)
 
         # Подключаем сигнал изменения модели
         self.modelSelector.currentIndexChanged.connect(self.OnModelIndexChanged)
@@ -489,6 +509,8 @@ class AIAssistantPanel(QWidget):
         
         # Добавляем сообщение пользователя в чат
         self.AppendToChat("Вы", query)
+        # Добавляем в историю
+        self.client.add_to_history("user", query)
         self.promptWindow.clear()
         
         # Показываем анимацию загрузки
@@ -513,6 +535,8 @@ class AIAssistantPanel(QWidget):
         self.HideLoadingAnimation()
         # Добавляем ответ ИИ в чат
         self.AppendToChat("ИИ", resp)
+        # Добавляем в историю
+        self.client.add_to_history("assistant", resp)
 
     def ShowLoadingAnimation(self):
         """Показывает анимацию 'ИИ думает'."""
@@ -599,6 +623,21 @@ class AIAssistantPanel(QWidget):
     def GetSelectedModel(self):
         # Возвращаем оригинальный ID из userData
         return self.modelSelector.currentData()
+    
+    def OnClearChatButtonClicked(self):
+        """Очищает историю чата и удаляет все сообщения из UI."""
+        # Очищаем историю в клиенте
+        self.client.clear_history()
+        
+        # Очищаем все виджеты из chatHistoryLayout
+        while self.chatHistoryLayout.count():
+            item = self.chatHistoryLayout.takeAt(0)
+            widget = item.widget()
+            if widget:
+                widget.deleteLater()
+        
+        # Скрываем анимацию загрузки, если она активна
+        self.HideLoadingAnimation()
     
     def SetDarkMode(self, is_dark, fs=14):
         self.isDarkMode = is_dark

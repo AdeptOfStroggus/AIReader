@@ -88,6 +88,7 @@ class AIClient():
     def __init__(self):
         from openai import AsyncOpenAI
         self.rag_manager = RAGManager()
+        self.chat_history = []  # История чата
         try:
             with open(".env", 'r', encoding='utf-8') as openai_env:
                 self.rawData = openai_env.read()
@@ -101,27 +102,42 @@ class AIClient():
             base_url=self.openaiapijson.get('OPENAI_BASE_PATH', '')
         )
 
+    def add_to_history(self, role, content):
+        """Добавляет сообщение в историю чата."""
+        self.chat_history.append({"role": role, "content": content})
+
+    def clear_history(self):
+        """Очищает историю чата."""
+        self.chat_history = []
+
 
     async def CreateResponceAsync(self, modelID, query, text):
         try:
+            # Система сообщение
+            system_message = {
+                "role": "system",
+                "content": (
+                    "Ты - надёжный помощник в анализе различной литературы. Твоя задача - максимально подробно и точно изучить текст и выполнить задачу, которую дал пользователь.\n\n"
+                    "ОБЯЗАТЕЛЬНОЕ УСЛОВИЕ: Для каждого утверждения, которое ты берешь из предоставленного текста, ты ДОЛЖЕН указать источник. "
+                    "Формулы приведены в формате LaTeX, переводи их в читаемый вид в HTML и указывай источник для формул так же, как и для текста."
+                    "Используй для этого специальный HTML-тег: <a href=\"source://page=N&text=цитата\">[Стр. N]</a>, где N - номер страницы, а 'цитата' - короткий (3-5 слов) уникальный фрагмент текста из этой страницы, на который ты ссылаешься.\n\n"
+                    "Пример: 'Согласно исследованиям, климат меняется <a href=\"source://page=5&text=глобальное потепление наступает\">[Стр. 5]</a>.'\n\n"
+                    "Ответ выдавай в HTML, и только ответ на задачу (не более). Не надо говорить 'этот HTML код выполняет то-то то-то' и такое прочее."
+                )
+            }
+            
+            # Пользовательское сообщение с текстом
+            user_message = {
+                "role": "user",
+                "content": f"Текст предоставлен ниже:\n{text}\n\nЗадача: {query}"
+            }
+            
+            # Собираем messages: система + история + текущее сообщение
+            messages = [system_message] + self.chat_history + [user_message]
+            
             response = await self.async_client.chat.completions.create(
                 model=modelID,
-                messages=[
-                    {
-                        "role": "system",
-                        "content": (
-                            "Ты - надёжный помощник в анализе различной литературы. Твоя задача - максимально подробно и точно изучить текст и выполнить задачу, которую дал пользователь.\n\n"
-                            "ОБЯЗАТЕЛЬНОЕ УСЛОВИЕ: Для каждого утверждения, которое ты берешь из предоставленного текста, ты ДОЛЖЕН указать источник. "
-                            "Используй для этого специальный HTML-тег: <a href=\"source://page=N&text=цитата\">[Стр. N]</a>, где N - номер страницы, а 'цитата' - короткий (3-5 слов) уникальный фрагмент текста из этой страницы, на который ты ссылаешься.\n\n"
-                            "Пример: 'Согласно исследованиям, климат меняется <a href=\"source://page=5&text=глобальное потепление наступает\">[Стр. 5]</a>.'\n\n"
-                            "Ответ выдавай в HTML, и только ответ на задачу (не более). Не надо говорить 'этот HTML код выполняет то-то то-то' и такое прочее."
-                        )
-                    },
-                    {
-                        "role": "user",
-                        "content": f"Текст предоставлен ниже:\n{text}\n\nЗадача: {query}"
-                    }
-                ]
+                messages=messages
             )
             return response.choices[0].message.content
         except Exception as e:

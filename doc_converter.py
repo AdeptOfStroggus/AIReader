@@ -21,14 +21,14 @@ class Converter:
 
             # Customize PDF pipeline
             pipeline_options = PdfPipelineOptions()
-            pipeline_options.do_ocr = False
+            pipeline_options.do_ocr = True
             # Отключаем принудительный OCR для всех страниц, чтобы ускорить работу с текстовыми PDF
             pipeline_options.ocr_options = EasyOcrOptions(lang=['ru', 'en'], force_full_page_ocr=False)
             pipeline_options.do_table_structure = False
             pipeline_options.accelerator_options = accelerator_options
             # Формулы замедляют процесс
-            pipeline_options.do_formula_enrichment = False
-
+            pipeline_options.do_formula_enrichment = True
+            pipeline_options.do_code_enrichment = True
             # Apply options to converter
             self._converter = DocumentConverter(
                 format_options={
