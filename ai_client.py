@@ -1,8 +1,209 @@
 import asyncio
+import base64
+from io import BytesIO
 import json
 import os
+import threading
+from PIL import Image
+import clip
+import faiss
+import torch
 
 # LangChain, FAISS и OpenAI импорты вынесены в ленивую загрузку
+
+import os
+import base64
+import pickle
+from io import BytesIO
+from typing import Union, List, Tuple, Optional
+
+import torch
+import faiss
+import numpy as np
+from PIL import Image
+import clip
+
+
+import os
+import base64
+import pickle
+from io import BytesIO
+from typing import List, Tuple, Optional, Union
+import numpy as np
+import torch
+import faiss
+from PIL import Image
+
+# Используем transformers для CLIP (более стабильно, чем оригинальный clip)
+from transformers import CLIPProcessor, CLIPModel
+
+
+import os
+import base64
+import pickle
+from io import BytesIO
+from typing import List, Tuple, Optional, Union
+import numpy as np
+import torch
+import faiss
+from PIL import Image
+from transformers import CLIPProcessor, CLIPModel
+
+
+class ImageIndexer:
+    """
+    Индексатор изображений по их ТЕКСТОВЫМ ОПИСАНИЯМ.
+    При добавлении изображения вы обязаны предоставить text_description.
+    Поиск осуществляется по текстовому запросу, возвращаются изображения.
+    """
+
+    def __init__(
+        self,
+        model_name: str = "openai/clip-vit-base-patch32",
+        device: Optional[str] = None,
+        caption_model: Optional[str] = "Salesforce/blip-image-captioning-large"
+    ):
+        self.device = device if device else ("cuda" if torch.cuda.is_available() else "cpu")
+        
+        # CLIP для превращения текста в эмбеддинги
+        self.clip_model = CLIPModel.from_pretrained(model_name).to(self.device)
+        self.clip_processor = CLIPProcessor.from_pretrained(model_name)
+        
+        # Определяем размерность эмбеддинга CLIP через реальный тензор
+        with torch.no_grad():
+            dummy_text = self.clip_processor(text=["test"], return_tensors="pt", padding=True).to(self.device)
+            # get_text_features возвращает тензор в новых версиях transformers
+            dummy_emb = self.clip_model.get_text_features(**dummy_text)
+            # Если вдруг вернулся объект с полем pooler_output или last_hidden_state
+            if hasattr(dummy_emb, 'pooler_output'):
+                dummy_emb = dummy_emb.pooler_output
+            elif hasattr(dummy_emb, 'last_hidden_state'):
+                dummy_emb = dummy_emb.last_hidden_state[:, 0, :]  # берём CLS-токен
+            # Теперь dummy_emb должен быть тензором
+            self.dimension = dummy_emb.shape[-1]  # последняя размерность
+        
+        self.index: Optional[faiss.Index] = None
+        self.metadata: List[dict] = []  # каждый элемент: {"page": int, "image": str, "description": str}
+        
+        # Опциональная модель для генерации описаний
+        self.caption_model = None
+        if caption_model:
+            from transformers import BlipProcessor, BlipForConditionalGeneration
+            self.caption_processor = BlipProcessor.from_pretrained(caption_model)
+            self.caption_model = BlipForConditionalGeneration.from_pretrained(caption_model).to(self.device)
+    
+    # -------------------------------------------------------------------------
+    # Преобразование входных данных в PIL Image
+    # -------------------------------------------------------------------------
+    def _to_pil_image(self, image_data: Union[str, bytes, Image.Image]) -> Image.Image:
+        if isinstance(image_data, Image.Image):
+            return image_data.convert("RGB")
+        if isinstance(image_data, str):
+            if os.path.isfile(image_data):
+                return Image.open(image_data).convert("RGB")
+            return Image.open(BytesIO(base64.b64decode(image_data))).convert("RGB")
+        if isinstance(image_data, bytes):
+            return Image.open(BytesIO(image_data)).convert("RGB")
+        raise TypeError("image_data должен быть base64 строкой, bytes, PIL.Image или путём к файлу")
+    
+    # -------------------------------------------------------------------------
+    # Генерация текстового описания (опционально)
+    # -------------------------------------------------------------------------
+    def generate_caption(self, image_data: Union[str, bytes, Image.Image]) -> str:
+        if self.caption_model is None:
+            raise RuntimeError("Caption model не загружена. Укажите caption_model при инициализации.")
+        img = self._to_pil_image(image_data)
+        inputs = self.caption_processor(img, return_tensors="pt").to(self.device)
+        out = self.caption_model.generate(**inputs, max_length=50)
+        caption = self.caption_processor.decode(out[0], skip_special_tokens=True)
+        return caption
+    
+    # -------------------------------------------------------------------------
+    # Получение эмбеддинга из ТЕКСТА (описания)
+    # -------------------------------------------------------------------------
+    def get_text_embedding(self, text: str) -> np.ndarray:
+        inputs = self.clip_processor(text=[text], return_tensors="pt", padding=True).to(self.device)
+        with torch.no_grad():
+            emb = self.clip_model.get_text_features(**inputs)
+        # Если emb является объектом (например, BaseModelOutput), извлекаем тензор
+        if hasattr(emb, 'pooler_output'):
+            emb = emb.pooler_output
+        elif hasattr(emb, 'last_hidden_state'):
+            emb = emb.last_hidden_state[:, 0, :]
+        # Нормализация
+        emb = emb / emb.norm(dim=-1, keepdim=True)
+        return emb.cpu().numpy().astype('float32').flatten()
+    
+    # -------------------------------------------------------------------------
+    # Добавление изображения с ОПИСАНИЕМ
+    # -------------------------------------------------------------------------
+    def add_image(
+        self,
+        image_data: Union[str, bytes, Image.Image],
+        page_index: int,
+        text_description: Optional[str] = None
+    ) -> int:
+        if text_description is None:
+            if self.caption_model is not None:
+                text_description = self.generate_caption(image_data)
+                print(f"Сгенерировано описание: {text_description}")
+            else:
+                raise ValueError("Необходимо указать text_description или включить caption_model")
+        
+        emb = self.get_text_embedding(text_description)
+        
+        if self.index is None:
+            self.index = faiss.IndexFlatIP(self.dimension)
+        
+        self.index.add(emb.reshape(1, -1))
+        self.metadata.append({
+            "page": page_index,
+            "image": image_data,
+            "description": text_description
+        })
+        return self.index.ntotal - 1
+    
+    # -------------------------------------------------------------------------
+    # Поиск по текстовому запросу
+    # -------------------------------------------------------------------------
+    def search(self, query: str, k: int = 5) -> List[Tuple[dict, float]]:
+        if self.index is None:
+            raise RuntimeError("Индекс пуст. Добавьте изображения с описаниями.")
+        
+        query_emb = self.get_text_embedding(query).reshape(1, -1)
+        scores, indices = self.index.search(query_emb, k)
+        
+        results = []
+        for idx, score in zip(indices[0], scores[0]):
+            if idx != -1:
+                results.append((self.metadata[idx], float(score)))
+        return results
+    
+    # -------------------------------------------------------------------------
+    # Сохранение / загрузка
+    # -------------------------------------------------------------------------
+    def save(self, index_path: str, metadata_path: str):
+        if self.index is None:
+            raise RuntimeError("Нечего сохранять.")
+        faiss.write_index(self.index, index_path)
+        with open(metadata_path, 'wb') as f:
+            pickle.dump({
+                'metadata': self.metadata,
+                'dimension': self.dimension,
+            }, f)
+    
+    @classmethod
+    def load(cls, index_path: str, metadata_path: str, model_name: str = "openai/clip-vit-base-patch32", device=None):
+        instance = cls(model_name=model_name, device=device)
+        with open(metadata_path, 'rb') as f:
+            data = pickle.load(f)
+        instance.metadata = data['metadata']
+        instance.dimension = data['dimension']
+        instance.index = faiss.read_index(index_path)
+        return instance
+    
+    def __len__(self):
+        return self.index.ntotal if self.index else 0
 
 class RAGManager:
     """Управление векторным индексом FAISS для поиска по книге."""
@@ -11,6 +212,8 @@ class RAGManager:
         self._embeddings = None
         self.vector_store = None
         self._text_splitter = None
+        self._lock = threading.Lock()
+        self.indexed_pages = set()
 
     @property
     def embeddings(self):
@@ -46,11 +249,13 @@ class RAGManager:
             for chunk in chunks
         ]
         
-        if self.vector_store is None:
-            from langchain_community.vectorstores import FAISS
-            self.vector_store = FAISS.from_documents(documents, self.embeddings)
-        else:
-            self.vector_store.add_documents(documents)
+        with self._lock:
+            if self.vector_store is None:
+                from langchain_community.vectorstores import FAISS
+                self.vector_store = FAISS.from_documents(documents, self.embeddings)
+            else:
+                self.vector_store.add_documents(documents)
+            self.indexed_pages.add(page_index)
 
     def search(self, query, k=4, page_numbers=None):
         """Поиск наиболее релевантных фрагментов с опциональной фильтрацией по страницам."""
@@ -88,6 +293,7 @@ class AIClient():
     def __init__(self):
         from openai import AsyncOpenAI
         self.rag_manager = RAGManager()
+        self.image_indexer = ImageIndexer()
         self.chat_history = []  # История чата
         try:
             with open(".env", 'r', encoding='utf-8') as openai_env:
@@ -99,7 +305,7 @@ class AIClient():
 
         self.async_client = AsyncOpenAI(
             api_key=self.openaiapijson.get('OPENAI_API_KEY', ''),
-            base_url=self.openaiapijson.get('OPENAI_BASE_PATH', '')
+            base_url=self.openaiapijson.get('OPENAI_BASE_PATH', ''),
         )
 
     def add_to_history(self, role, content):
@@ -119,10 +325,13 @@ class AIClient():
                 "content": (
                     "Ты - надёжный помощник в анализе различной литературы. Твоя задача - максимально подробно и точно изучить текст и выполнить задачу, которую дал пользователь.\n\n"
                     "ОБЯЗАТЕЛЬНОЕ УСЛОВИЕ: Для каждого утверждения, которое ты берешь из предоставленного текста, ты ДОЛЖЕН указать источник. "
+                    "Удели особое внимание формулам, и как они будут представлены пользователю. (необходимо, чтобы они хорошо рендерились в приложении, так что используй html для форматирования)"
                     "Формулы приведены в формате LaTeX, переводи их в читаемый вид в HTML и указывай источник для формул так же, как и для текста."
                     "Используй для этого специальный HTML-тег: <a href=\"source://page=N&text=цитата\">[Стр. N]</a>, где N - номер страницы, а 'цитата' - короткий (3-5 слов) уникальный фрагмент текста из этой страницы, на который ты ссылаешься.\n\n"
+                    "Если информации недостаточно в предоставленном тексте, честно признай это и не выдавай домыслов. "
+                    "Используй только материал из текста, который включен в контексте, и не приводи внешние знания.\n\n"
                     "Пример: 'Согласно исследованиям, климат меняется <a href=\"source://page=5&text=глобальное потепление наступает\">[Стр. 5]</a>.'\n\n"
-                    "Ответ выдавай в HTML, и только ответ на задачу (не более). Не надо говорить 'этот HTML код выполняет то-то то-то' и такое прочее."
+                    "Ответ выдавай в HTML, и только ответ на задачу (не более). Не надо говорить 'этот HTML код выполняет то-то то-то' и такое прочее. Убедись в правильном формате кода, чтобы сообщение было корректно показано пользователю."
                 )
             }
             
@@ -133,12 +342,69 @@ class AIClient():
             }
             
             # Собираем messages: система + история + текущее сообщение
-            messages = [system_message] + self.chat_history + [user_message]
+            messages = [system_message] + self.chat_history + [user_message_image]
             
             response = await self.async_client.chat.completions.create(
                 model=modelID,
-                messages=messages
+                messages=messages,
+
             )
+            self.add_to_history("user", user_message["content"])
+            self.add_to_history("assistant", response.choices[0].message.content)
+            return response.choices[0].message.content
+        except Exception as e:
+            return f"Ошибка API: {str(e)}"
+
+
+    async def CreateResponceAsync(self, modelID, query, text, images):
+        try:
+            # Система сообщение
+            system_message = {
+                "role": "system",
+                "content": (
+                    "Ты - надёжный помощник в анализе различной литературы. Твоя задача - максимально подробно и точно изучить текст и выполнить задачу, которую дал пользователь.\n\n"
+                    "ОБЯЗАТЕЛЬНОЕ УСЛОВИЕ: Для каждого утверждения, которое ты берешь из предоставленного текста, ты ДОЛЖЕН указать источник. "
+                    "Удели особое внимание формулам, и как они будут представлены пользователю. (необходимо, чтобы они хорошо рендерились в приложении, так что используй html для форматирования)"
+                    "Так же по возможности анализируй изображения, если они предоставлены, и детально описывай каждое из них с ссылками"
+                    "Формулы приведены в формате LaTeX, переводи их в читаемый вид в HTML и указывай источник для формул так же, как и для текста."
+                    "Используй для этого специальный HTML-тег: <a href=\"source://page=N&text=цитата\">[Стр. N]</a>, где N - номер страницы, а 'цитата' - короткий (3-5 слов) уникальный фрагмент текста из этой страницы, на который ты ссылаешься.\n\n"
+                    "Если информации недостаточно в предоставленном тексте, честно признай это и не выдавай домыслов. "
+                    "Используй только материал из текста, который включен в контексте, и не приводи внешние знания.\n\n"
+                    "Пример: 'Согласно исследованиям, климат меняется <a href=\"source://page=5&text=глобальное потепление наступает\">[Стр. 5]</a>.'\n\n"
+                    "Ответ выдавай в HTML, и только ответ на задачу (не более). Не надо говорить 'этот HTML код выполняет то-то то-то' и такое прочее. Убедись в правильном формате кода, чтобы сообщение было корректно показано пользователю."
+                )
+            }
+            
+            # Пользовательское сообщение с текстом
+            user_message_image = {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": f"Текст предоставлен ниже:\n{text}\n\nЗадача: {query}"
+                    },
+                    *[
+                        {
+                            "type": "image_url",
+                            "image_url": {"url": f"data:image/jpeg;base64,{i}"}
+                        }
+                        for i in images
+                    ]
+                ]
+            }
+
+            print(f"Итоговое сообщение: {user_message_image}")
+            # Собираем messages: система + история + текущее сообщение
+            messages = [system_message] + self.chat_history + [user_message_image]
+            
+            response = await self.async_client.chat.completions.create(
+                model=modelID,
+                messages=messages,
+                max_completion_tokens=32768,
+            )
+            self.add_to_history("user", user_message_image["content"])
+            self.add_to_history("assistant", response.choices[0].message.content)
+            print(response)
             return response.choices[0].message.content
         except Exception as e:
             return f"Ошибка API: {str(e)}"

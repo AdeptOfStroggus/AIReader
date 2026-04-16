@@ -21,17 +21,19 @@ class PageConverterRunnable(QRunnable):
     def run(self):
         try:
             # Конвертируем одну страницу
-            text = self.docConverter.convertPdf(self.filePath, 1, self.pageIndex)
+            [text, overall, imgs] = self.docConverter.convertPdf(self.filePath, 1, self.pageIndex)
             
             # Индексируем текст в FAISS В РАБОЧЕМ ПОТОКЕ, чтобы не блокировать главный поток!
             if self.aiClient:
                 try:
                     self.aiClient.rag_manager.add_page_text(text, self.pageIndex)
+                    for image in imgs:
+                        self.aiClient.image_indexer.add_image(image, self.pageIndex) # Индексируем изображения в том же порядке
                 except Exception as e:
                     print(f"Ошибка при индексировании страницы {self.pageIndex}: {e}")
             
             # Отправляем только текст в главный поток
-            self.onFinished(self.pageIndex, text)
+            self.onFinished(self.pageIndex, overall)
         except Exception as e:
             print(f"Ошибка при конвертации страницы {self.pageIndex}: {e}")
             self.onFinished(self.pageIndex, f"Ошибка загрузки: {str(e)}")
@@ -180,8 +182,8 @@ class ReaderPanel(QWidget):
                 border-radius: 4px;
             }
         """)
-        self.statusOverlay.setFixedWidth(180)
-        self.statusOverlay.setFixedHeight(40)
+        self.statusOverlay.setFixedWidth(220)
+        self.statusOverlay.setFixedHeight(60)
         
         self.statusCombo = QComboBox()
         self.statusCombo.currentIndexChanged.connect(self.OnStatusComboChanged)
@@ -215,8 +217,14 @@ class ReaderPanel(QWidget):
             }
         """)
         
-        self.statusLayout = QHBoxLayout(self.statusOverlay)
+        self.statusLayout = QVBoxLayout(self.statusOverlay)
         self.statusLayout.setContentsMargins(5, 5, 5, 5)
+        self.statusLayout.setSpacing(3)
+
+        self.statusSummaryLabel = QLabel("0/0/(0)")
+        self.statusSummaryLabel.setStyleSheet("background: transparent; color: #aaaaaa; font-size: 11px;")
+        self.statusSummaryLabel.setToolTip("x/y/(z): x - обработанных страниц, y - всего страниц, z - сейчас обрабатывается")
+        self.statusLayout.addWidget(self.statusSummaryLabel)
         self.statusLayout.addWidget(self.statusCombo)
 
         # Основной layout
@@ -351,6 +359,7 @@ class ReaderPanel(QWidget):
         self.currentPage=0
         self.setPagesCount(self.currentPage)
         self.LoadConvertedPage(self.currentPage) # Загружаем первую страницу
+        self.UpdateStatusSummary()
         self.navigationOverlay.raise_()
 
     def UpdatePageStatus(self, pageIndex, force=False):
@@ -382,6 +391,8 @@ class ReaderPanel(QWidget):
             self.statusCombo.setItemText(pageIndex, new_text)
             self.statusCombo.setItemData(pageIndex, color, Qt.ItemDataRole.ForegroundRole)
 
+        self.UpdateStatusSummary()
+
     def OnStatusComboChanged(self, index):
         """Переход на страницу при выборе в выпадающем списке."""
         if index != self.currentPage and index >= 0:
@@ -389,6 +400,13 @@ class ReaderPanel(QWidget):
             self.LoadConvertedPage(self.currentPage)
             self.pdfWindow.pageNavigator().jump(self.currentPage, QPointF(0, 0), 1.0)
             self.setPagesCount(self.currentPage)
+
+    def UpdateStatusSummary(self):
+        """Обновляет сводный индикатор статуса страниц."""
+        total_pages = self.maxPages
+        processed_pages = sum(1 for page_text in self.convertedPagesCache if page_text != "") if total_pages else 0
+        processing_pages = len(self.conversionInProgress)
+        self.statusSummaryLabel.setText(f"{processed_pages}/{total_pages}/({processing_pages})")
 
     def UpdateQueueOrder(self):
         """Переупорядочивает очередь оцифровки: сначала текущая, затем все слева, затем все справа.

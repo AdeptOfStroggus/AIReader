@@ -340,7 +340,7 @@ class MainApp(QMainWindow):
             self,
             "Импортировать файл",
             "",
-            "Все файлы (*.*)"
+            "Поддерживаемые форматы (*.pdf);;Все файлы (*.*)"
         )
         if filePath:
             self.readerPanel.LoadDocument(filePath)

@@ -37,7 +37,9 @@ class MessageBubble(QWidget):
         # Тело сообщения (бабл)
         self.bubble = QLabel(message)
         self.bubble.setWordWrap(True)
-        self.bubble.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse | Qt.TextInteractionFlag.LinksAccessibleByMouse)
+        self.bubble.setTextFormat(Qt.TextFormat.RichText)
+        self.bubble.setTextInteractionFlags(Qt.TextInteractionFlag.TextBrowserInteraction | Qt.TextInteractionFlag.LinksAccessibleByMouse)
+        self.bubble.setOpenExternalLinks(False)
         self.bubble.linkActivated.connect(self.OnLinkActivated)
         # Ограничиваем ширину бабла (примерно 80% от ширины панели)
         self.bubble.setMaximumWidth(350) 
@@ -257,7 +259,16 @@ class GetResponceWorker(QThread):
         else:
             context = f"ТЕКУЩАЯ СТРАНИЦА:\n{current_text}"
 
-        resp = asyncio.run(self.client.CreateResponceAsync(self.model, self.query, context))
+
+        imgs = []
+        results = self.client.image_indexer.search(self.query, k=3)
+        for meta, score in results:
+            image_data = meta['image']
+            imgs.append(image_data)
+
+        
+        resp = asyncio.run(self.client.CreateResponceAsync(modelID=self.model, query=self.query, text=context, images=imgs))
+        print(resp)
         self.completed.emit(resp)
 
 class AIAssistantPanel(QWidget):

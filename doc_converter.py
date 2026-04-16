@@ -27,7 +27,7 @@ class Converter:
             pipeline_options.do_ocr = True
             # Отключаем принудительный OCR для всех страниц, чтобы ускорить работу с текстовыми PDF
             pipeline_options.ocr_options = EasyOcrOptions(lang=['ru', 'en'], force_full_page_ocr=False)
-            pipeline_options.do_table_structure = False
+            pipeline_options.do_table_structure = True
             pipeline_options.accelerator_options = accelerator_options
             # Формулы замедляют процесс
             pipeline_options.do_formula_enrichment = True
@@ -56,10 +56,16 @@ class Converter:
         reader = PdfReader(filePath)
         number_of_pages = len(reader.pages)
 
-        result = str()
+        result_text = str()
+        result_overall = str()
+        result_imgs = []
         if(numOfPages + offset <= number_of_pages ):
 
             from docling_core.types.doc.base import ImageRefMode
+            from docling_core.types.doc.document import PictureItem, TableItem
+            import base64
+            from io import BytesIO
+
             for i in range(numOfPages):
                 page = reader.pages[i + offset]
 
@@ -72,11 +78,24 @@ class Converter:
                     writer.write(tmp_path)
 
                     #image_mode=ImageRefMode.EMBEDDED
-                    result += self.converter.convert(tmp_path).document.export_to_html()
+                    result_loc = self.converter.convert(tmp_path).document
+                    result_text += result_loc.export_to_text()
+                    result_overall += result_loc.export_to_html(image_mode=ImageRefMode.EMBEDDED)
+
+                    
+
+                    for element, _ in result_loc.iterate_items():
+                        if isinstance(element, (PictureItem, TableItem)):
+                            buffered = BytesIO()
+                            image = element.get_image(result_loc)   # получаем PIL Image
+                            image.save(buffered, format='JPEG')
+                            result_imgs.append(base64.b64encode(buffered.getvalue()).decode())  # конвертируем в base64 для передачи в UI
                     
                     # Удаляем временный файл после конвертации
                     try:
                         os.unlink(tmp_path)
                     except:
                         pass
-        return result
+
+    
+        return [result_text, result_overall, result_imgs]
