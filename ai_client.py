@@ -32,7 +32,7 @@ import numpy as np
 import torch
 import faiss
 from PIL import Image
-from transformers import CLIPProcessor, CLIPModel
+from transformers import CLIPProcessor, CLIPModel, CLIPConfig
 
 from openai import OpenAI
 from langchain_openai import ChatOpenAI
@@ -49,7 +49,7 @@ class ImageIndexer:
     def __init__(
         self,
         client,
-        model_name: str = "openai/clip-vit-base-patch32",
+        model_name: str = "zer0int/LongCLIP-GmP-ViT-L-14",
         device: Optional[str] = None,
         caption_model: Optional[str] = "Salesforce/blip2-opt-2.7b"
     ):
@@ -57,8 +57,8 @@ class ImageIndexer:
         self.client = client
         # CLIP для превращения текста в эмбеддинги
         self.clip_model = CLIPModel.from_pretrained(model_name)
-        self.clip_processor = CLIPProcessor.from_pretrained(model_name)
-        
+        self.clip_processor = CLIPProcessor.from_pretrained(model_name, padding="max_length", max_length=248)
+
         # Определяем размерность эмбеддинга CLIP через реальный тензор
         with torch.no_grad():
             dummy_text = self.clip_processor(text=["test"], return_tensors="pt", padding=True)
@@ -131,6 +131,7 @@ class ImageIndexer:
         self,
         image_data: Union[str, bytes, Image.Image],
         page_index: int,
+        index_on_page: int,
         text_description: Optional[str] = None
     ) -> int:
         if text_description is None:
@@ -148,6 +149,7 @@ class ImageIndexer:
         self.index.add(emb.reshape(1, -1))
         self.metadata.append({
             "page": page_index,
+            "index": index_on_page,
             "image": image_data,
             "description": text_description
         })
@@ -513,14 +515,26 @@ class AIClient():
                 "content": (
                     "Ты - надёжный помощник в анализе различной литературы. Твоя задача - максимально подробно и точно изучить текст и выполнить задачу, которую дал пользователь.\n\n"
                     "ОБЯЗАТЕЛЬНОЕ УСЛОВИЕ: Для каждого утверждения, которое ты берешь из предоставленного текста, ты ДОЛЖЕН указать источник. "
-                    "Удели особое внимание формулам, и как они будут представлены пользователю. (необходимо, чтобы они хорошо рендерились в приложении, так что используй html для форматирования)"
-                    "Так же по возможности анализируй изображения, если они предоставлены, и детально описывай каждое из них с ссылками"
-                    "Формулы приведены в формате LaTeX, переводи их в читаемый вид в HTML и указывай источник для формул так же, как и для текста."
+                    "Удели особое внимание формулам, и как они будут представлены пользователю. (необходимо, чтобы они хорошо рендерились в приложении, так что используй html для форматирования). Когда тебе нужно изобразить формулу, изображай лишь формулу, без текста по типу 'формула в читаемом виде предоставлена' и тому прочего "
+                    "Формулы в тексте приведены в формате LaTeX, в ответе переводи их в читаемый вид в HTML (MathML) и указывай источник для формул так же, как и для текста."
                     "Используй для этого специальный HTML-тег: <a href=\"source://page=N&text=цитата\">[Стр. N]</a>, где N - номер страницы, а 'цитата' - короткий (3-5 слов) уникальный фрагмент текста из этой страницы, на который ты ссылаешься.\n\n"
+                    "Так же по возможности анализируй изображения, если они предоставлены, и детально описывай каждое из них с ссылками"
                     "Если информации недостаточно в предоставленном тексте, честно признай это и не выдавай домыслов. "
                     "Используй только материал из текста, который включен в контексте, и не приводи внешние знания.\n\n"
                     "Пример: 'Согласно исследованиям, климат меняется <a href=\"source://page=5&text=глобальное потепление наступает\">[Стр. 5]</a>.'\n\n"
+                    "Пример с изображениями: Согласно исследованиям, график вольт-амперной характеристики диода находится на странице [3], изображении под номером [1], и описывает зависимость выходрного тока от входного напряжения, поданного на диод"
+                    """Пример с формулами: Согласно документу, зависимость описывается следующей формулой: <math display="block">
+                                    <mi>E</mi>
+                                    <mo>=</mo>
+                                    <mi>m</mi>
+                                    <msup>
+                                        <mi>c</mi>
+                                        <mn>2</mn>
+                                    </msup>
+                                    </math>
+                                    , которая отображает поведение системы в этой ситуации"""
                     "Ответ выдавай в HTML, и только ответ на задачу (не более). Не надо говорить 'этот HTML код выполняет то-то то-то' и такое прочее. Убедись в правильном формате кода, чтобы сообщение было корректно показано пользователю."
+
                 )
             }
             

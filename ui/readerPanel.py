@@ -54,8 +54,10 @@ class IndexingTask(QRunnable):
 
     def run(self):
         self.aiClient.rag_manager.add_page_text(self.text, self.pageIndex)
+        index = 0
         for img in self.images:
-            self.aiClient.image_indexer.add_image(img, self.pageIndex)
+            self.aiClient.image_indexer.add_image(img, index, self.pageIndex)
+            index += 1
 
 class ReaderPanel(QWidget):
     # Добавляем сигналы для безопасной работы с потоками

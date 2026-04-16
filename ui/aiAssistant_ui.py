@@ -244,13 +244,13 @@ class GetResponceWorker(QThread):
         if self.use_rag and rag_available:
             # Если пользователь указал конкретные страницы, ищем только по ним
             if page_numbers:
-                relevant_docs = self.client.rag_manager.multi_query_search(self.query, k=4, page_numbers=page_numbers, use_multi_query=True)
-                results = self.client.image_indexer.multi_query_search(self.query, k=3, )
+                relevant_docs = self.client.rag_manager.multi_query_search(self.query, k=10, page_numbers=page_numbers, use_multi_query=True)
+                results = self.client.image_indexer.multi_query_search(self.query, k=5)
                 context_header = f"\n--- ИНФОРМАЦИЯ ИЗ ВЫБРАННЫХ СТРАНИЦ ({', '.join(map(str, sorted(page_numbers)))}) ---\n"
             else:
                 # Если не указал, ищем по всей книге в равной степени
-                relevant_docs = self.client.rag_manager.multi_query_search(self.query, k=4, use_multi_query=True)
-                results = self.client.image_indexer.multi_query_search(self.query, k=3)
+                relevant_docs = self.client.rag_manager.multi_query_search(self.query, k=10, use_multi_query=True)
+                results = self.client.image_indexer.multi_query_search(self.query, k=5)
                 context_header = "\n--- НАЙДЕННАЯ ИНФОРМАЦИЯ ИЗ ВСЕЙ КНИГИ (RAG) ---\n"
             
             if relevant_docs:
@@ -271,7 +271,7 @@ class GetResponceWorker(QThread):
         for meta, score in results:
             image_data = meta['image']
             imgs.append(image_data)
-            context += f"Информация о изображении {c} -> Местоположение:{meta['page']}; Уверенность: {score}"
+            context += f"Информация о изображении {c} -> Местоположение (страница):{meta['page']}; номер изображения на странице:{meta['index']}; Уверенность: {score}"
             c += 1
 
         
