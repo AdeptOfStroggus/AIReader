@@ -372,23 +372,25 @@ def main():
 
     window = MainApp()
     window.show()
-    
-    # Фоновая инициализация клиента, чтобы не блокировать интерфейс
-    class ClientInitializer(QThread):
-        finished = Signal(object)
-        def run(self):
-            client = AIClient()
-            self.finished.emit(client)
+    client = AIClient()
+    window.SetClient(client)
 
-    def on_client_ready(client):
-        window.SetClient(client)
+    # Фоновая инициализация клиента, чтобы не блокировать интерфейс
+   # class ClientInitializer(QThread):
+   #     finished = Signal(object)
+   #     def run(self):
+   #         
+  #          self.finished.emit(client)
+#
+  #  def on_client_ready(client):
+        
 
     # Сохраняем ссылку на поток, чтобы его не удалил GC
-    global initializer
-    initializer = ClientInitializer()
-    initializer.finished.connect(on_client_ready)
-    initializer.start()
-    
+  #  global initializer
+  #  initializer = ClientInitializer()
+  #  initializer.finished.connect(on_client_ready)
+    #initializer.start()
+  #  
     app.exec()
 
 

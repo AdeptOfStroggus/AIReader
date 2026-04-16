@@ -1,42 +1,61 @@
 from PySide6.QtWidgets import QTextEdit, QVBoxLayout, QWidget, QPushButton, QHBoxLayout, QLabel, QGridLayout, QLineEdit, QProgressBar, QComboBox
-from PySide6.QtCore import Qt, Signal, QSize, QPointF, QThread, Slot, QPropertyAnimation, QEasingCurve, QRunnable, QThreadPool, QTimer, QTime
+from PySide6.QtCore import Qt, Signal, QSize, QPointF, QThread, Slot, QPropertyAnimation, QEasingCurve, QRunnable, QThreadPool, QTimer, QTime, QWaitCondition, QMutex, QMutexLocker
 from PySide6.QtGui import QPixmap, QImage, QPainter, QColor, QPalette
 from PySide6.QtPdf import QPdfDocument, QPdfLink
 from PySide6.QtPdfWidgets import QPdfView
 from doc_converter import Converter
 from multiprocessing import cpu_count
 
-class PageConverterRunnable(QRunnable):
-    """Рабочий класс для конвертации страницы PDF в текст (QRunnable для QThreadPool)."""
-    finished = Signal(int, str)  # pageIndex, resultText
 
-    def __init__(self, docConverter: Converter, filePath: str, pageIndex: int, onFinished, aiClient=None):
+
+class GpuWorker(QThread):
+    pageConverted = Signal(int, str, str, list)  # pageIndex, text, html, images
+
+    def __init__(self, docConverter, filePath):
         super().__init__()
         self.docConverter = docConverter
         self.filePath = filePath
-        self.pageIndex = pageIndex
-        self.onFinished = onFinished
-        self.aiClient = aiClient  # Для индексирования в фоновом потоке
+        self.queue = []  # очередь индексов страниц
+        self.mutex = QMutex()
+        self.condition = QWaitCondition()
+        self.running = True
+        self._is_closing = False
+
+    def add_page(self, pageIndex):
+        with QMutexLocker(self.mutex):
+            self.queue.append(pageIndex)
+            self.condition.wakeOne()
 
     def run(self):
-        try:
-            # Конвертируем одну страницу
-            [text, overall, imgs] = self.docConverter.convertPdf(self.filePath, 1, self.pageIndex)
-            
-            # Индексируем текст в FAISS В РАБОЧЕМ ПОТОКЕ, чтобы не блокировать главный поток!
-            if self.aiClient:
-                try:
-                    self.aiClient.rag_manager.add_page_text(text, self.pageIndex)
-                    for image in imgs:
-                        self.aiClient.image_indexer.add_image(image, self.pageIndex) # Индексируем изображения в том же порядке
-                except Exception as e:
-                    print(f"Ошибка при индексировании страницы {self.pageIndex}: {e}")
-            
-            # Отправляем только текст в главный поток
-            self.onFinished(self.pageIndex, overall)
-        except Exception as e:
-            print(f"Ошибка при конвертации страницы {self.pageIndex}: {e}")
-            self.onFinished(self.pageIndex, f"Ошибка загрузки: {str(e)}")
+        print("GpuWorker запущен")
+        while self.running:
+            with QMutexLocker(self.mutex):
+                if not self.queue:
+                    self.condition.wait(self.mutex)
+                if not self.running:
+                    break
+                pageIndex = self.queue.pop(0)
+            print(f"GpuWorker: начата обработка страницы {pageIndex}")
+            try:
+                text, html, images = self.docConverter.convertPdf(self.filePath, 1, pageIndex)
+                print(f"GpuWorker: страница {pageIndex} обработана, длина HTML: {len(html)}")
+                self.pageConverted.emit(pageIndex, text, html, images)
+            except Exception as e:
+                print(f"GpuWorker: ошибка на странице {pageIndex}: {e}")
+                self.pageConverted.emit(pageIndex, "", f"<p>Ошибка: {e}</p>", [])
+
+class IndexingTask(QRunnable):
+    def __init__(self, aiClient, pageIndex, text, images):
+        super().__init__() 
+        self.aiClient = aiClient
+        self.pageIndex = pageIndex
+        self.text = text
+        self.images = images
+
+    def run(self):
+        self.aiClient.rag_manager.add_page_text(self.text, self.pageIndex)
+        for img in self.images:
+            self.aiClient.image_indexer.add_image(img, self.pageIndex)
 
 class ReaderPanel(QWidget):
     # Добавляем сигналы для безопасной работы с потоками
@@ -54,6 +73,7 @@ class ReaderPanel(QWidget):
 
         #Окно с рендером конвертированного текста
         self.convertedTextView = QTextEdit(self)
+        self.convertedTextView.setAcceptRichText(True)
         self.convertedTextView.setReadOnly(True)
         self.convertedTextView.setStyleSheet("""
             QTextEdit {
@@ -275,19 +295,31 @@ class ReaderPanel(QWidget):
         # Инициализируем QThreadPool с динамическим количеством потоков на основе CPU
         try:
             num_cores = cpu_count()
-            self.maxConcurrentWorkers = max(1, num_cores // 2)  # Консервативный подход: CPU_count / 2
+            self.maxConcurrentWorkers = 1 #max(1, num_cores // 4)  # Консервативный подход: CPU_count / 
         except:
-            self.maxConcurrentWorkers = 2  # Fallback на 2 потока, если не удалось определить количество ядер
+            self.maxConcurrentWorkers = 1 # # Fallback на 2 потока, если не удалось определить количество ядер
         
-        self.converterPool = QThreadPool()
-        self.converterPool.setMaxThreadCount(self.maxConcurrentWorkers)
-        print(f"Инициализирована многопоточная конвертация: {self.maxConcurrentWorkers} рабочих потоков (CPU cores: {num_cores if 'num_cores' in locals() else 'unknown'})")
+    #    self.converterPool = QThreadPool()
+     #   self.converterPool.setMaxThreadCount(self.maxConcurrentWorkers)
+     #   print(f"Инициализирована многопоточная конвертация: {self.maxConcurrentWorkers} рабочих потоков (CPU cores: {num_cores if 'num_cores' in locals() else 'unknown'})")
         
         # Подключаем сигнал завершения конвертации к слоту (гарантирует выполнение в главном потоке)
-        self.pageConversionFinished.connect(self._onPageConversionFinished)
-        
-        self.isDarkMode = True
+     #   self.pageConversionFinished.connect(self._onPageConversionFinished)
 
+      # В ReaderPanel:
+        self.cpuPool = QThreadPool.globalInstance()
+        try:
+            num_cores = cpu_count()
+            cpu_threads = max(2, num_cores // 2)
+        except:
+            cpu_threads = 4
+        self.cpuPool.setMaxThreadCount(cpu_threads)
+        print(f"CPU пул для индексации: {cpu_threads} потоков")
+
+        # GPU-воркер пока не создаём – создадим при загрузке документа
+        self.gpuWorker = None
+        self._is_closing = False
+        self.isDarkMode = True
         
     def GetConvertedText(self):
         if not self.convertedPagesCache or self.currentPage >= len(self.convertedPagesCache):
@@ -319,11 +351,21 @@ class ReaderPanel(QWidget):
         self.convertedTextView.setHtml(text)
 
     def LoadDocument(self, filePath):
+    # Останавливаем предыдущего воркера, если есть
+        if self.gpuWorker is not None:
+            self.gpuWorker.running = False
+            self.gpuWorker.condition.wakeOne()
+            self.gpuWorker.wait()
+            self.gpuWorker = None
+
+        # Останавливаем CPU-пул (ждём завершения всех индексаций)
+        self.cpuPool.waitForDone()
+
         self.currentFilePath = filePath
         self.document.load(filePath)
         self.maxPages = self.docConverter.getPagesCount(filePath)
-        
-        # Обновляем выпадающий список страниц
+
+        # Обновляем выпадающий список статуса страниц
         self.statusCombo.blockSignals(True)
         self.statusCombo.clear()
         for i in range(self.maxPages):
@@ -333,32 +375,39 @@ class ReaderPanel(QWidget):
 
         self.pdfWindow.setDocument(self.document)
         self.convertedPagesCache.clear()
-        self.convertedPagesCache = [str() for x in range(self.maxPages)]
-        
-        # Очищаем очередь и множество активных конвертаций
-        # Ждем завершения всех активных задач в пуле потоков
-        self.converterPool.waitForDone()  # Ожидаем завершения всех текущих задач
+        self.convertedPagesCache = ["" for _ in range(self.maxPages)]
+
+        # Очищаем очереди и статусы
         self.conversionInProgress.clear()
         self.workerQueue.clear()
         self.pendingQueueUpdate = False
-        self.aiClient.rag_manager.clear() # Очищаем FAISS индекс
-        
-        # Инициализируем конвертер для первой страницы чтобы избежать ленивой загрузки
+        if(self.aiClient is not None):
+            self.aiClient.rag_manager.clear()
+
+        # Инициализируем конвертер (ленивая загрузка моделей)
         print("Инициализирую конвертер для первой страницы...")
         try:
-            # Это вызовет инициализацию converter и его компонентов
-            self.docConverter.converter  # Просто обращаемся к свойству, чтобы инициализировать
+            _ = self.docConverter.converter  # обращаемся к свойству
             print("Конвертер инициализирован успешно")
         except Exception as e:
             print(f"Ошибка при инициализации конвертера: {e}")
 
-        # print(self.convertedPagesCache)
-        # self.LoadConvertedPage(0)
-        self.SetPdfPage(0)
-
-        self.currentPage=0
+        # Создаём новый GPU-воркер
+        try:
+            self.gpuWorker = GpuWorker(self.docConverter, filePath)
+            self.gpuWorker.pageConverted.connect(self._onPageConversionFinished)
+            self.gpuWorker.start()
+            print("gpuWorker запущен")
+        except Exception as e:
+            print(f"Ошибка создания gpuWorker: {e}")
+        print(f"LoadDocument: gpuWorker создан, running={self.gpuWorker.running}")
+        # Устанавливаем первую страницу
+        self.currentPage = 0
         self.setPagesCount(self.currentPage)
-        self.LoadConvertedPage(self.currentPage) # Загружаем первую страницу
+        self.pdfWindow.pageNavigator().jump(self.currentPage, QPointF(0, 0), 1.0)
+
+        # Запускаем загрузку первой страницы
+        self.LoadConvertedPage(self.currentPage)
         self.UpdateStatusSummary()
         self.navigationOverlay.raise_()
 
@@ -409,116 +458,102 @@ class ReaderPanel(QWidget):
         self.statusSummaryLabel.setText(f"{processed_pages}/{total_pages}/({processing_pages})")
 
     def UpdateQueueOrder(self):
-        """Переупорядочивает очередь оцифровки: сначала текущая, затем все слева, затем все справа.
-        Теперь также агрессивно загружает близлежащие страницы в фоне."""
         self.workerQueue.clear()
-        
-        # 1. Текущая страница (самый высокий приоритет)
+        # 1. Текущая страница
         if self.convertedPagesCache[self.currentPage] == "" and self.currentPage not in self.conversionInProgress:
             self.workerQueue.append(self.currentPage)
             self.UpdatePageStatus(self.currentPage)
-            
-        # 2. Все страницы слева (от текущей к началу)
+        # 2. Страницы слева
         for i in range(self.currentPage - 1, -1, -1):
-            if self.convertedPagesCache[i] == "" and i not in self.conversionInProgress:
-                if i not in self.workerQueue:
-                    self.workerQueue.append(i)
-                    self.UpdatePageStatus(i)  # Обновляем только для новых элементов
-                
-        # 3. Все страницы справа (от текущей к концу)
+            if self.convertedPagesCache[i] == "" and i not in self.conversionInProgress and i not in self.workerQueue:
+                self.workerQueue.append(i)
+                self.UpdatePageStatus(i)
+        # 3. Страницы справа
         for i in range(self.currentPage + 1, self.maxPages):
-            if self.convertedPagesCache[i] == "" and i not in self.conversionInProgress:
-                if i not in self.workerQueue:
-                    self.workerQueue.append(i)
-                    self.UpdatePageStatus(i)  # Обновляем только для новых элементов
-            
-        self.ProcessQueue()
-    
+            if self.convertedPagesCache[i] == "" and i not in self.conversionInProgress and i not in self.workerQueue:
+                self.workerQueue.append(i)
+                self.UpdatePageStatus(i)
+        self.ProcessQueue()   # <-- эта строка должна быть
+        
     def PreloadNearbyPages(self, radius=5):
-        """Предзагружает страницы вблизи текущей страницы в фон.
-        Используется для заполнения емкости многопоточности во время простоя."""
-        # Диапазон страниц для предзагрузки
         start = max(0, self.currentPage - radius)
         end = min(self.maxPages, self.currentPage + radius + 1)
-        
-        added_to_queue = False
+        added = False
         for i in range(start, end):
-            if i != self.currentPage:  # Пропускаем текущую страницу (она уже приоритизирована)
+            if i != self.currentPage:
                 if self.convertedPagesCache[i] == "" and i not in self.conversionInProgress and i not in self.workerQueue:
                     self.workerQueue.append(i)
-                    added_to_queue = True
-        
-        # Если добавили страницы в очередь, обработаем их
-        if added_to_queue:
+                    added = True
+        if added:
             self.ProcessQueue()
 
     def ProcessQueue(self):
-        """Берет задачи из очереди и отправляет их в пул потоков для обработки.
-        Заполняет все доступные слоты рабочих потоков из очереди."""
-        # Цикл для заполнения всех доступных слотов рабочих потоков
-        while self.workerQueue and len(self.conversionInProgress) < self.maxConcurrentWorkers:
-            # Берем следующую страницу из очереди
+        if self.gpuWorker is None:
+            print("ProcessQueue: gpuWorker is None")
+            return
+        if not self.gpuWorker.running:
+            print(f"ProcessQueue: gpuWorker.running = {self.gpuWorker.running}")
+            return
+        if not self.gpuWorker or not self.gpuWorker.running:
+            print("ProcessQueue: gpuWorker не готов")
+            return
+        while self.workerQueue:
             pageIndex = self.workerQueue.pop(0)
-            
-            # На всякий случай проверяем еще раз
             if self.convertedPagesCache[pageIndex] != "" or pageIndex in self.conversionInProgress:
-                continue  # Пропускаем и переходим к следующей доступной странице
-            
-            # Добавляем страницу в множество активных конвертаций
+                continue
             self.conversionInProgress.add(pageIndex)
-            # Обновляем статус на "Обработка"
             self.UpdatePageStatus(pageIndex)
-            
-            # Создаем рабочий объект и отправляем его в пул потоков
-            runnable = PageConverterRunnable(
-                self.docConverter, 
-                self.currentFilePath, 
-                pageIndex, 
-                self.OnPageConverted,
-                self.aiClient  # Передаем aiClient для индексирования в рабочем потоке
-            )
-            self.converterPool.start(runnable)
-
-    def OnPageConverted(self, pageIndex, text):
-        """Callback из рабочего потока - просто пересылает сигнал в главный поток."""
-        # Испускаем сигнал чтобы обработка произошла в главном потоке
-        self.pageConversionFinished.emit(pageIndex, text)
+            print(f"ProcessQueue: отправляю страницу {pageIndex} в gpuWorker")
+            self.gpuWorker.add_page(pageIndex)
+        def OnPageConverted(self, pageIndex, text):
+            """Callback из рабочего потока - просто пересылает сигнал в главный поток."""
+            # Испускаем сигнал чтобы обработка произошла в главном потоке
+            self.pageConversionFinished.emit(pageIndex, text)
     
-    @Slot(int, str)
-    def _onPageConversionFinished(self, pageIndex, text):
-        """Обработчик завершения конвертации страницы (выполняется в главном потоке)."""
-        # Удаляем страницу из множества активных конвертаций
+    @Slot(int, str, str, list)
+    def _onPageConversionFinished(self, pageIndex, text, html, images):
+        if self._is_closing:
+            return
+        print(f"Главный поток: получена страница {pageIndex}")
+        """
+        Вызывается из GpuWorker после конвертации страницы.
+        text – обычный текст (для индексации)
+        html – форматированный HTML (для отображения)
+        images – список base64 изображений
+        """
+        # 1. Убираем страницу из множества "в обработке"
         if pageIndex in self.conversionInProgress:
             self.conversionInProgress.discard(pageIndex)
-            
-        self.convertedPagesCache[pageIndex] = text
-        # Индексирование уже произошло в рабочем потоке!
-        
-        # Обновляем статус страницы в списке только если это текущая страница или нужно её показать
+
+        # 2. Сохраняем HTML в кэш (для быстрого показа при перелистывании)
+        self.convertedPagesCache[pageIndex] = html
+
+        # 3. Запускаем индексацию в CPU-пуле (не блокируем GUI и GPU)
+        indexing_task = IndexingTask(self.aiClient, pageIndex, text, images)
+        self.cpuPool.start(indexing_task)
+
+        # 4. Обновляем статус в выпадающем списке
+        self.UpdatePageStatus(pageIndex, force=(pageIndex == self.currentPage))
+
+        # 5. Если это текущая страница – показываем HTML и убираем индикатор загрузки
         if pageIndex == self.currentPage:
-            # Для текущей страницы обновляем немедленно
-            self.UpdatePageStatus(pageIndex, force=True)
-            self.convertedTextView.setHtml(text)
+            self.convertedTextView.setHtml(html)
             self.loadingBar.hide()
-            
-            # Проверяем, есть ли отложенное выделение
+
+            # Если есть отложенное выделение текста – применяем
             if self._pendingHighlight:
                 self._HighlightSnippet(self._pendingHighlight)
                 self._pendingHighlight = ""
-            
-            # После загрузки текущей страницы, предзагружаем соседние страницы
+
+            # После загрузки текущей страницы предзагружаем соседние
             self.PreloadNearbyPages(radius=5)
-        else:
-            # Для остальных страниц - всегда обновляем статус при завершении
-            self.UpdatePageStatus(pageIndex)
-            
-        # Если есть отложенное обновление очереди, выполняем его сейчас
+
+        # 6. Если были отложенные обновления очереди – выполняем
         if self.pendingQueueUpdate:
             self.pendingQueueUpdate = False
             self.UpdateQueueOrder()
         else:
-            # Обрабатываем следующие задачи из очереди
-            # Так как один поток освободился, может быть место для новых задач
+            # Иначе берём следующую страницу из очереди (если есть)
             self.ProcessQueue()
 
     def LoadConvertedPage(self, pageIndex):
@@ -557,8 +592,21 @@ class ReaderPanel(QWidget):
         pass
         
     def closeEvent(self, event):
-        # Останавливаем все фоновые задачи при закрытии
-        self.converterPool.waitForDone()  # Ждем завершения всех задач в пуле потоков
+        self._is_closing = True
+        # Отключаем сигналы, чтобы слоты не вызывались после разрушения
+        if self.gpuWorker is not None:
+            try:
+                self.gpuWorker.pageConverted.disconnect(self._onPageConversionFinished)
+            except TypeError:
+                pass  # если не был подключён
+            self.gpuWorker.running = False
+            self.gpuWorker.condition.wakeOne()
+            if not self.gpuWorker.wait(3000):  # таймаут 3 секунды
+                print("GpuWorker не завершился, принудительно завершаем")
+                self.gpuWorker.terminate()
+                self.gpuWorker.wait()
+        # Для cpuPool – ограничиваем время ожидания
+        self.cpuPool.waitForDone(2000)
         super().closeEvent(event)
 
     def OnPrevPageButtonClicked(self):
@@ -848,7 +896,7 @@ class ReaderPanel(QWidget):
 
     def StopAllWorkers(self):
         """Останавливает все активные конвертации перед закрытием приложения."""
-        self.converterPool.waitForDone()  # Ждем завершения всех задач в пуле потоков
+        #self.converterPool.waitForDone()  # Ждем завершения всех задач в пуле потоков
         self.conversionInProgress.clear()
         self.workerQueue.clear()
 

@@ -218,6 +218,8 @@ class GetResponceWorker(QThread):
         is_loading = (self.text == "Текст загружается, подождите...")
         current_text = "[Текст текущей страницы еще загружается и пока недоступен]" if is_loading else self.text
         
+
+
         # 1. Парсим запрос на наличие указаний конкретных страниц
         # Поддерживаемые форматы: "стр 5", "страница 10", "стр. 12-15", "страницы 1, 3, 5"
         page_numbers = []
@@ -236,14 +238,19 @@ class GetResponceWorker(QThread):
         context = ""
         rag_available = self.client.rag_manager.vector_store is not None
         
+        imgs = []
+        results = []
+
         if self.use_rag and rag_available:
             # Если пользователь указал конкретные страницы, ищем только по ним
             if page_numbers:
-                relevant_docs = self.client.rag_manager.search(self.query, k=10, page_numbers=page_numbers)
+                relevant_docs = self.client.rag_manager.multi_query_search(self.query, k=4, page_numbers=page_numbers, use_multi_query=True)
+                results = self.client.image_indexer.multi_query_search(self.query, k=3, )
                 context_header = f"\n--- ИНФОРМАЦИЯ ИЗ ВЫБРАННЫХ СТРАНИЦ ({', '.join(map(str, sorted(page_numbers)))}) ---\n"
             else:
                 # Если не указал, ищем по всей книге в равной степени
-                relevant_docs = self.client.rag_manager.search(self.query, k=10)
+                relevant_docs = self.client.rag_manager.multi_query_search(self.query, k=4, use_multi_query=True)
+                results = self.client.image_indexer.multi_query_search(self.query, k=3)
                 context_header = "\n--- НАЙДЕННАЯ ИНФОРМАЦИЯ ИЗ ВСЕЙ КНИГИ (RAG) ---\n"
             
             if relevant_docs:
@@ -260,11 +267,12 @@ class GetResponceWorker(QThread):
             context = f"ТЕКУЩАЯ СТРАНИЦА:\n{current_text}"
 
 
-        imgs = []
-        results = self.client.image_indexer.search(self.query, k=3)
+        c = 1
         for meta, score in results:
             image_data = meta['image']
             imgs.append(image_data)
+            context += f"Информация о изображении {c} -> Местоположение:{meta['page']}; Уверенность: {score}"
+            c += 1
 
         
         resp = asyncio.run(self.client.CreateResponceAsync(modelID=self.model, query=self.query, text=context, images=imgs))
