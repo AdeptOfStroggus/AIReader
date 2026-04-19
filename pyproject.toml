@@ -5,6 +5,7 @@ description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.11,<3.13"
 dependencies = [
+    "clip>=0.2.0",
     "docling>=2.86.0",
     "easyocr>=1.7.2",
     "faiss-cpu>=1.13.2",
@@ -12,9 +13,13 @@ dependencies = [
     "langchain>=1.2.15",
     "langchain-community>=0.4.1",
     "langchain-huggingface>=1.2.1",
+    "langchain-openai>=1.1.14",
     "openai>=2.31.0",
     "pydantic>=2.12.5",
     "pypdf>=6.10.0",
     "pyside6>=6.11.0",
     "sentence-transformers>=5.4.0",
+    "fastapi>=0.115.0",
+    "uvicorn[standard]>=0.32.0",
+    "python-multipart>=0.0.12",
 ]

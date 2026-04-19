@@ -46,18 +46,24 @@ class ImageIndexer:
     Поиск осуществляется по текстовому запросу, возвращаются изображения.
     """
 
+    _clip_cache: dict = {}  # model_name -> (clip_model, clip_processor)
+
     def __init__(
         self,
         client,
         model_name: str = "openai/clip-vit-base-patch32",
         device: Optional[str] = None,
-        caption_model: Optional[str] = "Salesforce/blip2-opt-2.7b"
+        caption_model: Optional[str] = None
     ):
         self.device = device if device else ("cuda" if torch.cuda.is_available() else "cpu")
         self.client = client
-        # CLIP для превращения текста в эмбеддинги
-        self.clip_model = CLIPModel.from_pretrained(model_name)
-        self.clip_processor = CLIPProcessor.from_pretrained(model_name)
+        # CLIP для превращения текста в эмбеддинги (кешируем на уровне класса)
+        if model_name not in ImageIndexer._clip_cache:
+            ImageIndexer._clip_cache[model_name] = (
+                CLIPModel.from_pretrained(model_name),
+                CLIPProcessor.from_pretrained(model_name),
+            )
+        self.clip_model, self.clip_processor = ImageIndexer._clip_cache[model_name]
         
         # Определяем размерность эмбеддинга CLIP через реальный тензор
         with torch.no_grad():
@@ -299,8 +305,10 @@ class ImageIndexer:
 
 class RAGManager:
     """Управление векторным индексом FAISS для поиска по книге."""
+
+    _embeddings_cache: dict = {}  # model_name -> HuggingFaceEmbeddings instance
+
     def __init__(self, client):
-        # Используем легкую модель для эмбеддингов (инициализируется при первом использовании)
         self._embeddings = None
         self.vector_store = None
         self._text_splitter = None
@@ -336,8 +344,11 @@ class RAGManager:
     @property
     def embeddings(self):
         if self._embeddings is None:
-            from langchain_huggingface import HuggingFaceEmbeddings
-            self._embeddings = HuggingFaceEmbeddings(model_name="sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2")
+            model_name = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
+            if model_name not in RAGManager._embeddings_cache:
+                from langchain_huggingface import HuggingFaceEmbeddings
+                RAGManager._embeddings_cache[model_name] = HuggingFaceEmbeddings(model_name=model_name)
+            self._embeddings = RAGManager._embeddings_cache[model_name]
         return self._embeddings
 
     @property
