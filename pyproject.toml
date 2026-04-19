@@ -15,7 +15,7 @@ dependencies = [
     "langchain-openai>=1.1.14",
     "openai>=2.31.0",
     "pydantic>=2.12.5",
-    "pypdf>=6.10.0",
+    "pypdf[full]>=6.10.0",
     "pyside6>=6.11.0",
     "sentence-transformers>=5.4.0",
     "fastapi>=0.115.0",
@@ -23,10 +23,12 @@ dependencies = [
     "python-multipart>=0.0.12",
     "torch==2.11.0+cu126",
     "torchvision==0.26.0+cu126",
+    "clip",
 ]
 
 [tool.uv.sources]
 torch = { index = "pytorch" }
+clip = { git = "https://github.com/openai/CLIP.git" }
 
 [[tool.uv.index]]
 name = "pytorch"
